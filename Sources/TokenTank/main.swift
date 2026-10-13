@@ -2,6 +2,41 @@ import AppKit
 import SwiftUI
 import Darwin
 
+enum EnergyMark {
+    static func level(_ remaining: Double?) -> Int {
+        guard let remaining, remaining.isFinite else { return -1 }
+        return Int(ceil(max(0, min(100, remaining)) / 12.5))
+    }
+    static func image(remaining: Double? = 100) -> NSImage {
+        let count = level(remaining)
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
+            for index in 0..<8 {
+                NSColor.black.withAlphaComponent(index < count ? 1 : 0.20).setStroke()
+                let arc = NSBezierPath()
+                let start = 90 - CGFloat(index) * 37.5
+                arc.appendArc(withCenter: NSPoint(x: 10, y: 10), radius: 7.1, startAngle: start - 4, endAngle: start - 33.5, clockwise: true)
+                arc.lineWidth = 2.2
+                arc.lineCapStyle = .butt
+                arc.stroke()
+            }
+            NSColor.black.setFill()
+            let star = NSBezierPath()
+            star.move(to: NSPoint(x: 10, y: 13.7))
+            for point in [NSPoint(x: 11.1, y: 11.1), NSPoint(x: 13.7, y: 10), NSPoint(x: 11.1, y: 8.9), NSPoint(x: 10, y: 6.3), NSPoint(x: 8.9, y: 8.9), NSPoint(x: 6.3, y: 10), NSPoint(x: 8.9, y: 11.1)] { star.line(to: point) }
+            star.close(); star.fill()
+            let arrow = NSBezierPath()
+            arrow.move(to: NSPoint(x: 5.5, y: 16.2))
+            arrow.line(to: NSPoint(x: 2.1, y: 14.8))
+            arrow.line(to: NSPoint(x: 5.1, y: 13))
+            arrow.close(); arrow.fill()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = remaining.map { "近星点，剩余额度 \(Int($0.rounded()))%" } ?? "近星点，额度未知"
+        return image
+    }
+}
+
 struct Window: Codable {
     let usedPercent: Double?
     let windowDurationMins: Double?
@@ -40,28 +75,74 @@ struct Snapshot: Codable {
     }
     var mainWindow: Window? { buckets.first?.1.primary ?? buckets.first?.1.secondary }
 }
+enum SetupIssue: String {
+    case missingCLI, loginRequired, incompatibleCLI
+}
 struct QuotaError: LocalizedError {
     let message: String
+    let issue: SetupIssue?
+    init(message: String, issue: SetupIssue? = nil) { self.message = message; self.issue = issue }
     var errorDescription: String? { message }
+}
+struct Inspection {
+    let snapshot: Snapshot
+    let cliVersion: String
 }
 
 final class CLIReader {
     static func locate() -> String? {
+        if let index = CommandLine.arguments.firstIndex(of: "--cli-path"), CommandLine.arguments.count > index + 1 {
+            let path = CommandLine.arguments[index + 1]
+            return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+        }
         let custom = UserDefaults.standard.string(forKey: "cliPath")
-        let paths = [custom, "/opt/homebrew/bin/codex", "/usr/local/bin/codex"] .compactMap { $0 }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let paths = [custom, "/opt/homebrew/bin/codex", "/usr/local/bin/codex",
+                     home.appendingPathComponent(".local/bin/codex").path,
+                     home.appendingPathComponent(".npm-global/bin/codex").path,
+                     home.appendingPathComponent(".volta/bin/codex").path].compactMap { $0 }
             + (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/codex" }
         return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
-    static func read() throws -> Snapshot {
-        guard let path = locate() else { throw QuotaError(message: "找不到 Codex CLI。请安装 CLI，或通过“选择 CLI”指定可执行文件。") }
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+    static func version(at path: String) throws -> String {
+        let process = Process(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+        process.environment = environment(for: path)
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning && Date() < deadline { usleep(10_000) }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL); process.waitUntilExit()
+            throw QuotaError(message: "CLI 版本检测超时，请确认所选文件是 Codex CLI。", issue: .incompatibleCLI)
+        }
+        process.waitUntilExit()
+        let value = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard process.terminationStatus == 0, value.hasPrefix("codex-cli ") else {
+            throw QuotaError(message: "所选程序不是可用的 Codex CLI，请重新选择或更新 CLI。", issue: .incompatibleCLI)
+        }
+        return value
+    }
+    static func environment(for path: String) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = URL(fileURLWithPath: path).deletingLastPathComponent().path + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (environment["PATH"] ?? "")
+        return environment
+    }
+    static func read() throws -> Snapshot { try inspect().snapshot }
+    static func inspect() throws -> Inspection {
+        guard let path = locate() else { throw QuotaError(message: "尚未找到 Codex CLI。安装后点击重新检测，或选择已有的 CLI。", issue: .missingCLI) }
+        let cliVersion = try version(at: path)
         let process = Process(), input = Pipe(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = ["app-server"]
         process.standardInput = input; process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = URL(fileURLWithPath: path).deletingLastPathComponent().path + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (environment["PATH"] ?? "")
-        process.environment = environment
+        process.environment = environment(for: path)
         try process.run()
         defer {
             try? input.fileHandleForWriting.close()
@@ -77,7 +158,7 @@ final class CLIReader {
             var data = try JSONSerialization.data(withJSONObject: value); data.append(10)
             try input.fileHandleForWriting.write(contentsOf: data)
         }
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "token_tank", "title": "Token Tank", "version": "0.1.0"]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "token_tank", "title": "近星点", "version": AppVersion.version]]])
         var buffer = Data()
         let deadline = Date().addingTimeInterval(25)
         while Date() < deadline {
@@ -93,13 +174,27 @@ final class CLIReader {
                 let line = buffer.prefix(upTo: newline); buffer.removeSubrange(...newline)
                 guard let response = try JSONSerialization.jsonObject(with: line) as? [String: Any], let id = response["id"] as? Int else { continue }
                 if let error = response["error"] as? [String: Any] {
-                    throw QuotaError(message: (error["message"] as? String ?? "额度查询失败") + "。请确认已通过 codex login 登录订阅账户。")
+                    let message = error["message"] as? String ?? "额度查询失败"
+                    if error["code"] as? Int == -32601 {
+                        throw QuotaError(message: "当前 CLI 缺少所需接口，请更新 Codex CLI 后重试。", issue: .incompatibleCLI)
+                    }
+                    let lower = message.lowercased()
+                    let authFailure = ["unauthorized", "401", "not authenticated", "not logged", "login", "sign in", "token expired", "requires chatgpt"].contains { lower.contains($0) }
+                    throw QuotaError(message: message, issue: authFailure ? .loginRequired : nil)
                 }
                 if id == 1 {
                     try send(["method": "initialized"])
-                    try send(["id": 2, "method": "account/rateLimits/read"])
-                } else if id == 2, let result = response["result"] {
-                    return try JSONDecoder().decode(Snapshot.self, from: JSONSerialization.data(withJSONObject: result))
+                    try send(["id": 2, "method": "account/read", "params": ["refreshToken": false]])
+                } else if id == 2 {
+                    let result = response["result"] as? [String: Any]
+                    let account = result?["account"] as? [String: Any]
+                    guard let type = account?["type"] as? String, ["chatgpt", "chatgptAuthTokens"].contains(type) else {
+                        throw QuotaError(message: "请在 Codex CLI 中登录你的 ChatGPT 订阅账户。API Key 登录不能用于订阅额度监控。", issue: .loginRequired)
+                    }
+                    try send(["id": 3, "method": "account/rateLimits/read"])
+                } else if id == 3, let result = response["result"] {
+                    let snapshot = try JSONDecoder().decode(Snapshot.self, from: JSONSerialization.data(withJSONObject: result))
+                    return Inspection(snapshot: snapshot, cliVersion: cliVersion)
                 }
             }
         }
@@ -113,10 +208,23 @@ final class Store: ObservableObject {
     @Published var error: String?
     @Published var loading = false
     @Published var now = Date()
+    @Published var cliVersion: String?
+    @Published var setupIssue: SetupIssue?
+    @Published var showSetup: Bool
+    @Published var showPercentage: Bool {
+        didSet {
+            settings.set(showPercentage, forKey: "showPercentage")
+            onChange?()
+        }
+    }
     var onChange: (() -> Void)?
+    private let settings: UserDefaults
     private var timer: Timer?
     private var lastAttempt = Date.distantPast
-    init(automaticRefresh: Bool = true) {
+    init(automaticRefresh: Bool = true, settings: UserDefaults = .standard) {
+        self.settings = settings
+        showSetup = !settings.bool(forKey: "hasCompletedSetup")
+        showPercentage = settings.object(forKey: "showPercentage") as? Bool ?? true
         guard automaticRefresh else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -130,16 +238,49 @@ final class Store: ObservableObject {
         guard !loading else { return }
         loading = true; lastAttempt = Date(); onChange?()
         DispatchQueue.global(qos: .utility).async {
-            let result = Result { try CLIReader.read() }
+            let result = Result { try CLIReader.inspect() }
             DispatchQueue.main.async {
                 self.loading = false
                 switch result {
-                case .success(let snapshot): self.snapshot = snapshot; self.updatedAt = Date(); self.error = nil
-                case .failure(let error): self.error = error.localizedDescription
+                case .success(let inspection):
+                    self.snapshot = inspection.snapshot; self.cliVersion = inspection.cliVersion
+                    self.updatedAt = Date(); self.error = nil; self.setupIssue = nil
+                case .failure(let error):
+                    self.error = error.localizedDescription
+                    self.setupIssue = (error as? QuotaError)?.issue
+                    if self.setupIssue != nil {
+                        self.showSetup = true
+                        self.snapshot = nil; self.updatedAt = nil
+                    }
                 }
                 self.onChange?()
             }
         }
+    }
+    func finishSetup() {
+        guard snapshot != nil else { return }
+        settings.set(true, forKey: "hasCompletedSetup")
+        showSetup = false
+    }
+    func copyCommand(_ command: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+    }
+    func openLogin() {
+        guard let path = CLIReader.locate() else { setupIssue = .missingCLI; return }
+        do {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(AppVersion.bundleIdentifier, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let file = directory.appendingPathComponent("Codex-login.command")
+            let searchPath = CLIReader.environment(for: path)["PATH"] ?? "/usr/bin:/bin"
+            let script = "#!/bin/zsh\nexport PATH=\(CLIReader.shellQuote(searchPath))\n\(CLIReader.shellQuote(path)) login\nprint '\n完成后返回近星点，点击重新检测。'\n"
+            try script.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+            let configuration = NSWorkspace.OpenConfiguration()
+            NSWorkspace.shared.open([file], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"), configuration: configuration) { _, failure in
+                if let failure { DispatchQueue.main.async { self.error = failure.localizedDescription } }
+            }
+        } catch { self.error = error.localizedDescription }
     }
     func chooseCLI() {
         let panel = NSOpenPanel()
@@ -277,6 +418,11 @@ struct UsageInfoView: View {
             section("理论用量", "按当前时间在额度窗口中的进度，计算匀速消耗时的理论已用和剩余百分比。它是消费节奏参考，不代表额度随时间补充。")
             section("窗口时间", "开始时间由“下次重置时间 − 窗口长度”推算。所有时间使用系统时区：\(TimeZone.current.identifier)。")
             section("重置机会", "可用次数以服务端返回值为准。到期明细可能不完整；未提供到期时间不代表永久有效。")
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                Text("近星点 \(AppVersion.version)（构建 \(AppVersion.build)）").font(.subheadline.weight(.medium))
+                Text("作者：白星澈AstraWhite").font(.callout).foregroundStyle(.secondary)
+            }
         }.padding(18).frame(width: 320, alignment: .leading)
     }
     private func section(_ title: String, _ body: String) -> some View {
@@ -287,6 +433,65 @@ struct UsageInfoView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+struct SetupView: View {
+    @ObservedObject var store: Store
+    private var installed: Bool { CLIReader.locate() != nil }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("连接你的 Codex").font(.title3.weight(.semibold))
+            Text("近星点复用本机 CLI 登录，只读取订阅额度。每位使用者登录自己的 ChatGPT 账户。")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 9) {
+                Label("1 · 安装 Codex CLI", systemImage: installed ? "checkmark.circle.fill" : "circle")
+                    .font(.headline)
+                if installed {
+                    Text(store.cliVersion ?? "已找到 CLI，请完成登录检测。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(CLIReader.locate() ?? "").font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(2).textSelection(.enabled)
+                } else {
+                    Text("已安装 Homebrew 时，可在终端执行以下命令：")
+                        .font(.caption).foregroundStyle(.secondary)
+                    command("brew install --cask codex")
+                }
+                HStack {
+                    Link("安装与更新说明", destination: URL(string: "https://learn.chatgpt.com/docs/codex/cli")!)
+                    Spacer()
+                    Button("选择已有 CLI…") { store.chooseCLI() }.disabled(store.loading)
+                }.font(.caption)
+            }.padding(12).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 9) {
+                Label("2 · 登录 ChatGPT 账户", systemImage: store.snapshot != nil ? "checkmark.circle.fill" : "circle")
+                    .font(.headline)
+                Text("使用订阅账户登录，完成浏览器授权后返回这里重新检测。API Key 登录不适用于订阅额度。")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                command(CLIReader.locate().map { CLIReader.shellQuote($0) + " login" } ?? "codex login")
+                Button("打开终端登录…") { store.openLogin() }.disabled(!installed || store.loading)
+            }.padding(12).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+            if let error = store.error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            if store.snapshot != nil {
+                Label("已连接，可以查看额度了。", systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green)
+            }
+            HStack {
+                Button(store.loading ? "正在检测…" : "重新检测") { store.refresh() }.disabled(store.loading)
+                Spacer()
+                Button("开始使用") { store.finishSetup() }.disabled(store.snapshot == nil || store.loading)
+                    .buttonStyle(.borderedProminent)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func command(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(text).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            Button { store.copyCommand(text) } label: { Image(systemName: "doc.on.doc") }
+                .buttonStyle(.borderless).help("复制命令")
+        }.padding(8).background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 private typealias ViewState<Value> = SwiftUI.State<Value>
@@ -305,8 +510,8 @@ struct PanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "gauge.with.dots.needle.50percent").foregroundStyle(Color.accentColor)
-                Text("Token Tank").font(.headline).fixedSize()
+                Image(nsImage: EnergyMark.image(remaining: store.snapshot?.mainWindow?.remaining)).foregroundStyle(Color.accentColor)
+                Text("近星点").font(.headline).fixedSize()
                 Spacer(minLength: 4)
                 HStack(spacing: 4) {
                     if store.loading { ProgressView().controlSize(.mini) }
@@ -325,9 +530,12 @@ struct PanelView: View {
                         UsageInfoView { showInfo = false }
                     }
                 Menu {
+                    Toggle("菜单栏显示百分比", isOn: $store.showPercentage)
+                    Divider()
+                    Button("连接与登录引导…") { store.showSetup = true; store.refresh() }
                     Button("选择 Codex CLI…") { store.chooseCLI() }
                     Divider()
-                    Button("退出 Token Tank") { NSApp.terminate(nil) }
+                    Button("退出 近星点") { NSApp.terminate(nil) }
                 } label: { toolbarIcon("gearshape") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).foregroundStyle(.secondary).fixedSize().help("设置")
             }
@@ -365,7 +573,9 @@ struct PanelView: View {
     }
     @ViewBuilder private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let snapshot = store.snapshot {
+            if store.showSetup {
+                SetupView(store: store)
+            } else if let snapshot = store.snapshot {
                 ForEach(snapshot.buckets, id: \.0) { key, bucket in
                     let name = bucket.limitName ?? (key == "codex" ? "Codex" : key)
                     if let primary = bucket.primary { WindowView(title: windowTitle(name, primary), window: primary, now: store.now) }
@@ -401,7 +611,7 @@ struct PanelView: View {
             } else if store.error == nil {
                 Text("正在读取本机 Codex 账户额度…").foregroundStyle(.secondary).padding(.vertical, 24)
             }
-            if let error = store.error {
+            if !store.showSetup, let error = store.error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -411,14 +621,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let store = Store()
     var status: NSStatusItem!
     let popover = NSPopover()
+    private var renderedLevel = -2
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         status.button?.target = self; status.button?.action = #selector(toggle)
-        let icon = NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "Codex 剩余额度")?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
-        icon?.isTemplate = true
-        status.button?.image = icon
         status.button?.imagePosition = .imageLeading
         popover.behavior = .transient; popover.delegate = self
         let controller = NSHostingController(rootView: PanelView(store: store))
@@ -427,12 +634,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         store.onChange = { [weak self] in self?.updateTitle() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         updateTitle(); store.refresh()
+        if store.showSetup {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.toggle() }
+        }
     }
     func updateTitle() {
         let expired = store.snapshot?.mainWindow?.end.map { $0 <= Date() } ?? false
         let remaining = store.snapshot?.mainWindow?.remaining
-        status.button?.title = remaining.map { " \(Int($0.rounded()))%\(store.error != nil || expired ? " !" : "")" } ?? (store.loading ? " …" : " —")
-        status.button?.toolTip = store.error ?? remaining.map { "Token Tank · Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Token Tank · Codex 订阅额度"
+        let level = EnergyMark.level(remaining)
+        if renderedLevel != level {
+            status.button?.image = EnergyMark.image(remaining: remaining)
+            renderedLevel = level
+        }
+        status.button?.title = store.showPercentage ? (remaining.map { " \(Int($0.rounded()))%\(store.error != nil || expired ? " !" : "")" } ?? (store.loading ? " …" : " —")) : ""
+        status.button?.toolTip = store.error ?? remaining.map { "近星点 · Codex 剩余额度 \(Int($0.rounded()))%" } ?? "近星点 · Codex 订阅额度"
         status.button?.setAccessibilityLabel(remaining.map { "Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Codex 订阅额度")
     }
     @objc func toggle() {
@@ -446,7 +661,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func wake() { store.refresh() }
 }
 
-if let index = CommandLine.arguments.firstIndex(of: "--render-info"), CommandLine.arguments.count > index + 1 {
+if let index = CommandLine.arguments.firstIndex(of: "--render-icon-levels"), CommandLine.arguments.count > index + 1 {
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 600, pixelsHigh: 220, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    let levels: [Double?] = [100, 75, 50, 12, 0, nil]
+    for row in 0..<2 {
+        let y = CGFloat(row * 110)
+        (row == 0 ? NSColor(white: 0.12, alpha: 1) : NSColor.white).setFill()
+        NSRect(x: 0, y: y, width: 600, height: 110).fill()
+        for (column, value) in levels.enumerated() {
+            let icon = EnergyMark.image(remaining: value)
+            icon.isTemplate = false
+            let tinted = NSImage(size: icon.size)
+            tinted.lockFocus()
+            icon.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+            (row == 0 ? NSColor.white : NSColor.black).setFill()
+            NSRect(origin: .zero, size: icon.size).fill(using: .sourceAtop)
+            tinted.unlockFocus()
+            let x = CGFloat(column * 100)
+            tinted.draw(in: NSRect(x: x + 17, y: y + 62, width: 20, height: 20))
+            tinted.draw(in: NSRect(x: x + 51, y: y + 52, width: 40, height: 40))
+            let label = value.map { "\(Int($0))%" } ?? "未知"
+            (label as NSString).draw(at: NSPoint(x: x + 32, y: y + 21), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: row == 0 ? NSColor.white : NSColor.black])
+        }
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-info"), CommandLine.arguments.count > index + 1 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let host = NSHostingView(rootView: UsageInfoView {}.environment(\.colorScheme, .light).background(Color(nsColor: .windowBackgroundColor)))
@@ -463,6 +705,13 @@ if let index = CommandLine.arguments.firstIndex(of: "--render-info"), CommandLin
     try data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
     window.orderOut(nil)
 } else if CommandLine.arguments.contains("--self-test") {
+    precondition(EnergyMark.level(nil) == -1)
+    precondition(EnergyMark.level(0) == 0)
+    precondition(EnergyMark.level(1) == 1)
+    precondition(EnergyMark.level(12.5) == 1)
+    precondition(EnergyMark.level(12.6) == 2)
+    precondition(EnergyMark.level(93) == 8)
+    precondition(EnergyMark.level(100) == 8)
     let window = Window(usedPercent: 30, windowDurationMins: 60, resetsAt: 7200)
     precondition(window.start == Date(timeIntervalSince1970: 3600))
     precondition(window.remaining == 70)
@@ -471,12 +720,29 @@ if let index = CommandLine.arguments.firstIndex(of: "--render-info"), CommandLin
     precondition(window.theoretical(Date(timeIntervalSince1970: 9000)) == 100)
     let sparse = try JSONDecoder().decode(Snapshot.self, from: Data("{\"rateLimitsByLimitId\":{},\"rateLimitResetCredits\":null}".utf8))
     precondition(sparse.buckets.isEmpty)
-    print("PASS: window math, clamping, missing fields")
+    let suiteName = "org.sourcepowered.tokentank.tests." + UUID().uuidString
+    let preferences = UserDefaults(suiteName: suiteName)!
+    defer { preferences.removePersistentDomain(forName: suiteName) }
+    let settingsStore = Store(automaticRefresh: false, settings: preferences)
+    precondition(settingsStore.showSetup && settingsStore.showPercentage)
+    var changes = 0
+    settingsStore.onChange = { changes += 1 }
+    settingsStore.showPercentage = false
+    precondition(changes == 1)
+    settingsStore.snapshot = sparse
+    settingsStore.finishSetup()
+    let reloaded = Store(automaticRefresh: false, settings: preferences)
+    precondition(!reloaded.showSetup && !reloaded.showPercentage)
+    print("PASS: window math, missing fields, quota icon levels, first-run and menu preferences")
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.count > index + 1 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let store = Store(automaticRefresh: false)
-    do { store.snapshot = try CLIReader.read(); store.updatedAt = Date() }
+    store.showSetup = CommandLine.arguments.contains("--setup")
+    do {
+        let inspection = try CLIReader.inspect()
+        store.snapshot = inspection.snapshot; store.cliVersion = inspection.cliVersion; store.updatedAt = Date()
+    }
     catch { store.error = error.localizedDescription }
     let dark = CommandLine.arguments.contains("--dark")
     let host = NSHostingView(rootView: PanelView(store: store, expanded: CommandLine.arguments.contains("--expanded")).environment(\.colorScheme, dark ? .dark : .light))
