@@ -116,7 +116,8 @@ final class Store: ObservableObject {
     var onChange: (() -> Void)?
     private var timer: Timer?
     private var lastAttempt = Date.distantPast
-    init() {
+    init(automaticRefresh: Bool = true) {
+        guard automaticRefresh else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.now = Date()
@@ -157,86 +158,253 @@ func dateText(_ date: Date?) -> String {
     let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
     return formatter.string(from: date)
 }
+func shortDate(_ date: Date?) -> String {
+    guard let date else { return "暂无数据" }
+    let formatter = DateFormatter()
+    formatter.dateFormat = Calendar.current.component(.year, from: date) == Calendar.current.component(.year, from: Date()) ? "M月d日 HH:mm" : "yyyy年M月d日 HH:mm"
+    return formatter.string(from: date)
+}
 func countdown(_ end: Date?, _ now: Date) -> String {
     guard let end else { return "暂无数据" }
     let seconds = Int(end.timeIntervalSince(now))
-    guard seconds > 0 else { return "等待刷新重置状态" }
-    return "\(seconds / 86400)天 \(seconds / 3600 % 24)时 \(seconds / 60 % 60)分 \(seconds % 60)秒"
+    guard seconds > 0 else { return "等待重置" }
+    if seconds < 60 { return "不到 1 分钟" }
+    if seconds < 3600 { return "\(seconds / 60) 分钟" }
+    if seconds < 86400 { return "\(seconds / 3600) 小时 \(seconds / 60 % 60) 分" }
+    return "\(seconds / 86400) 天 \(seconds / 3600 % 24) 小时 \(seconds / 60 % 60) 分"
+}
+func windowTitle(_ name: String, _ window: Window) -> String {
+    guard let minutes = window.windowDurationMins, minutes > 0 else { return name }
+    let duration: String
+    if minutes.truncatingRemainder(dividingBy: 1440) == 0 { duration = "\(Int(minutes / 1440)) 天" }
+    else if minutes.truncatingRemainder(dividingBy: 60) == 0 { duration = "\(Int(minutes / 60)) 小时" }
+    else { duration = "\(Int(minutes)) 分钟" }
+    return "\(name) · \(duration)窗口"
+}
+struct UsageBar: View {
+    let actual: Double?
+    let theory: Double?
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.08))
+                if let actual {
+                    Capsule().fill(Color.accentColor)
+                        .frame(width: geometry.size.width * max(0, min(100, actual)) / 100)
+                }
+                if let theory {
+                    RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.75))
+                        .frame(width: 2, height: 14)
+                        .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * theory / 100 - 1)))
+                }
+            }.frame(height: 8).frame(maxHeight: .infinity)
+        }.frame(height: 16)
+        .accessibilityLabel("实际已用 \(percent(actual))，理论已用 \(percent(theory))")
+    }
 }
 struct WindowView: View {
     let title: String
     let window: Window
     let now: Date
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.headline)
-            HStack { Text("实际已用"); Spacer(); Text(percent(window.usedPercent)).monospacedDigit() }
-            ProgressView(value: max(0, min(100, window.usedPercent ?? 0)), total: 100).tint(.blue)
-            HStack { Text("实际剩余"); Spacer(); Text(percent(window.remaining)).monospacedDigit() }
-            HStack { Text("理论已用 / 剩余"); Spacer(); Text("\(percent(window.theoretical(now))) / \(percent(window.theoretical(now).map { 100 - $0 }))").monospacedDigit() }
-            ProgressView(value: window.theoretical(now) ?? 0, total: 100).tint(.teal)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("剩余额度").font(.caption).foregroundStyle(.secondary)
+                    Text(percent(window.remaining)).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text("距离重置").font(.caption).foregroundStyle(.secondary)
+                    Text(countdown(window.end, now)).font(.subheadline.weight(.medium)).monospacedDigit()
+                }
+            }
+            Grid(horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow {
+                    Text("用量").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("已用").frame(width: 78, alignment: .trailing)
+                    Text("剩余").frame(width: 78, alignment: .trailing)
+                }.font(.caption).foregroundStyle(.secondary)
+                usageRow("实际", window.usedPercent, window.remaining)
+                usageRow("理论", window.theoretical(now), window.theoretical(now).map { 100 - $0 })
+            }.font(.subheadline).monospacedDigit()
+            VStack(alignment: .leading, spacing: 5) {
+                UsageBar(actual: window.usedPercent, theory: window.theoretical(now))
+                HStack(spacing: 5) {
+                    Circle().fill(Color.accentColor).frame(width: 5, height: 5)
+                    Text("实际已用")
+                    Text("·")
+                    Text("刻度为理论进度")
+                }.font(.caption2).foregroundStyle(.secondary)
+            }
             if let actual = window.usedPercent, let theory = window.theoretical(now) {
                 Text(String(format: "比匀速预算%@ %.1f 个百分点", actual >= theory ? "多用" : "少用", abs(actual - theory)))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Divider()
-            detail("开始（推算）", dateText(window.start))
-            detail("下次重置", dateText(window.end))
-            detail("距离重置", countdown(window.end, now))
+            VStack(spacing: 6) {
+                detail("开始（推算）", window.start)
+                detail("下次重置", window.end)
+            }
         }.padding(14).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
     }
-    func detail(_ name: String, _ value: String) -> some View {
-        HStack { Text(name).foregroundStyle(.secondary); Spacer(); Text(value).monospacedDigit() }.font(.caption)
+    func usageRow(_ title: String, _ used: Double?, _ remaining: Double?) -> some View {
+        GridRow {
+            Text(title).frame(maxWidth: .infinity, alignment: .leading)
+            Text(percent(used)).frame(width: 78, alignment: .trailing)
+            Text(percent(remaining)).frame(width: 78, alignment: .trailing)
+        }
+    }
+    func detail(_ name: String, _ date: Date?) -> some View {
+        HStack { Text(name).foregroundStyle(.secondary); Spacer(); Text(shortDate(date)).monospacedDigit().help(dateText(date)) }.font(.caption)
     }
 }
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+struct UsageInfoView: View {
+    let close: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("额度说明").font(.headline)
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark").frame(width: 22, height: 22) }
+                    .buttonStyle(.borderless).accessibilityLabel("关闭说明")
+            }
+            section("理论用量", "按当前时间在额度窗口中的进度，计算匀速消耗时的理论已用和剩余百分比。它是消费节奏参考，不代表额度随时间补充。")
+            section("窗口时间", "开始时间由“下次重置时间 − 窗口长度”推算。所有时间使用系统时区：\(TimeZone.current.identifier)。")
+            section("重置机会", "可用次数以服务端返回值为准。到期明细可能不完整；未提供到期时间不代表永久有效。")
+        }.padding(18).frame(width: 320, alignment: .leading)
+    }
+    private func section(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(body).font(.callout).foregroundStyle(.secondary)
+                .lineSpacing(4).multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+private typealias ViewState<Value> = SwiftUI.State<Value>
 struct PanelView: View {
     @ObservedObject var store: Store
+    @ViewState private var contentHeight: CGFloat = 320
+    @ViewState private var showCredits = false
+    @ViewState private var showInfo = false
+    init(store: Store, expanded: Bool = false) {
+        self.store = store
+        _showCredits = ViewState(initialValue: expanded)
+    }
+    private var nearestExpiry: Date? {
+        store.snapshot?.rateLimitResetCredits?.credits?.compactMap { $0.expiresAt }.min().map(Date.init(timeIntervalSince1970:))
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "gauge.with.dots.needle.50percent").foregroundStyle(.blue)
-                Text("Token Tank").font(.title3.bold())
-                Spacer()
-                if store.loading { ProgressView().controlSize(.small) }
-                Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }.disabled(store.loading).help("刷新额度")
+            HStack(spacing: 8) {
+                Image(systemName: "gauge.with.dots.needle.50percent").foregroundStyle(Color.accentColor)
+                Text("Token Tank").font(.headline).fixedSize()
+                Spacer(minLength: 4)
+                HStack(spacing: 4) {
+                    if store.loading { ProgressView().controlSize(.mini) }
+                    else { Circle().fill(store.error == nil ? Color.green : Color.orange).frame(width: 5, height: 5) }
+                    Text(updateText).font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }.help("\(updateText)\n\(dateText(store.updatedAt))")
+                Button { store.refresh() } label: {
+                    toolbarIcon("arrow.clockwise")
+                }.buttonStyle(.plain).disabled(store.loading).help("刷新额度")
+                Button { showInfo.toggle() } label: {
+                    toolbarIcon("info.circle")
+                }.buttonStyle(.plain)
+                    .accessibilityLabel("查看额度说明")
+                    .popover(isPresented: $showInfo, arrowEdge: .top) {
+                        UsageInfoView { showInfo = false }
+                    }
+                Menu {
+                    Button("选择 Codex CLI…") { store.chooseCLI() }
+                    Divider()
+                    Button("退出 Token Tank") { NSApp.terminate(nil) }
+                } label: { toolbarIcon("gearshape") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).foregroundStyle(.secondary).fixedSize().help("设置")
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let snapshot = store.snapshot {
-                        ForEach(snapshot.buckets, id: \.0) { key, bucket in
-                            if let primary = bucket.primary { WindowView(title: "\(bucket.limitName ?? key) · 主窗口", window: primary, now: store.now) }
-                            if let secondary = bucket.secondary { WindowView(title: "\(bucket.limitName ?? key) · 次窗口", window: secondary, now: store.now) }
-                        }
-                        if snapshot.buckets.isEmpty { Text("当前账户未返回额度窗口。") }
-                        HStack {
-                            Text("剩余重置次数").font(.headline)
-                            Spacer()
-                            Text(snapshot.rateLimitResetCredits?.availableCount.map { "\($0) 次" } ?? "暂无数据").font(.headline)
-                        }
-                        if let credits = snapshot.rateLimitResetCredits?.credits {
-                            ForEach(Array(credits.enumerated()), id: \.offset) { _, credit in
-                                Text("重置机会到期：\(credit.expiresAt.map { dateText(Date(timeIntervalSince1970: $0)) } ?? "未提供")")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    } else if store.error == nil {
-                        Text("正在读取本机 Codex 登录账户的额度…").foregroundStyle(.secondary).padding(.vertical, 24)
-                    }
-                    if let error = store.error {
-                        Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
-                    }
-                    Text("理论用量按窗口内匀速消耗计算。时间使用系统时区：\(TimeZone.current.identifier)。")
-                        .font(.caption).foregroundStyle(.secondary)
+                content
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: ContentHeightKey.self, value: geometry.size.height)
+                    })
+            }
+            .frame(height: min(contentHeight, 480))
+            .onPreferenceChange(ContentHeightKey.self) { height in
+                if height > 0 && abs(contentHeight - height) > 0.5 { contentHeight = height }
+            }
+
+        }.padding(16).frame(width: 400).background(Color(nsColor: .windowBackgroundColor))
+    }
+    private func toolbarIcon(_ name: String) -> some View {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor]))
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration) ?? NSImage()
+        image.isTemplate = false
+        return Image(nsImage: image)
+            .renderingMode(.original)
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+    }
+    private var updateText: String {
+        if store.loading { return "正在刷新…" }
+        guard let date = store.updatedAt else { return "尚未获取额度" }
+        let minutes = max(0, Int(store.now.timeIntervalSince(date) / 60))
+        let relative = minutes == 0 ? "刚刚更新" : "\(minutes) 分钟前更新"
+        return store.error == nil ? relative : "上次成功：\(shortDate(date))"
+    }
+    @ViewBuilder private var content: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let snapshot = store.snapshot {
+                ForEach(snapshot.buckets, id: \.0) { key, bucket in
+                    let name = bucket.limitName ?? (key == "codex" ? "Codex" : key)
+                    if let primary = bucket.primary { WindowView(title: windowTitle(name, primary), window: primary, now: store.now) }
+                    if let secondary = bucket.secondary { WindowView(title: windowTitle(name, secondary), window: secondary, now: store.now) }
                 }
-            }.frame(maxHeight: 540)
-            Divider()
-            Text("\(store.error != nil ? "上次成功" : "更新")：\(dateText(store.updatedAt))").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("选择 CLI…") { store.chooseCLI() }
-                Spacer()
-                Button("退出") { NSApp.terminate(nil) }
-            }.font(.caption)
-        }.padding(16).frame(width: 410).background(Color(nsColor: .windowBackgroundColor))
+                if snapshot.buckets.isEmpty { Text("当前账户未返回额度窗口。").foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("可用重置").font(.subheadline.weight(.medium))
+                        Text(snapshot.rateLimitResetCredits?.availableCount.map { "\($0) 次" } ?? "暂无数据").font(.subheadline.weight(.semibold))
+                        Spacer()
+                        if let credits = snapshot.rateLimitResetCredits?.credits, !credits.isEmpty {
+                            Button { showCredits.toggle() } label: {
+                                Image(systemName: showCredits ? "chevron.up" : "chevron.down").frame(width: 20, height: 20)
+                            }.buttonStyle(.borderless).help(showCredits ? "收起到期明细" : "展开到期明细")
+                        }
+                    }
+                    if let nearestExpiry {
+                        Text("最近到期 · \(shortDate(nearestExpiry))").font(.caption).foregroundStyle(.secondary).help(dateText(nearestExpiry))
+                    }
+                    if showCredits, let credits = snapshot.rateLimitResetCredits?.credits {
+                        Divider()
+                        ForEach(Array(credits.sorted { ($0.expiresAt ?? .infinity) < ($1.expiresAt ?? .infinity) }.enumerated()), id: \.offset) { index, credit in
+                            HStack {
+                                Text("重置机会 \(index + 1)").foregroundStyle(.secondary)
+                                Spacer()
+                                let expiry = credit.expiresAt.map(Date.init(timeIntervalSince1970:))
+                                Text(expiry.map { shortDate($0) + " 到期" } ?? "未提供到期时间").help(dateText(expiry))
+                            }.font(.caption).monospacedDigit()
+                        }
+                    }
+                }.padding(.horizontal, 2)
+            } else if store.error == nil {
+                Text("正在读取本机 Codex 账户额度…").foregroundStyle(.secondary).padding(.vertical, 24)
+            }
+            if let error = store.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
@@ -247,8 +415,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.setActivationPolicy(.accessory)
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         status.button?.target = self; status.button?.action = #selector(toggle)
+        let icon = NSImage(systemSymbolName: "gauge.with.dots.needle.50percent", accessibilityDescription: "Codex 剩余额度")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
+        icon?.isTemplate = true
+        status.button?.image = icon
+        status.button?.imagePosition = .imageLeading
         popover.behavior = .transient; popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: PanelView(store: store))
+        let controller = NSHostingController(rootView: PanelView(store: store))
+        controller.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = controller
         store.onChange = { [weak self] in self?.updateTitle() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         updateTitle(); store.refresh()
@@ -256,8 +431,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func updateTitle() {
         let expired = store.snapshot?.mainWindow?.end.map { $0 <= Date() } ?? false
         let remaining = store.snapshot?.mainWindow?.remaining
-        status.button?.title = remaining.map { "剩余 \(Int($0.rounded()))%\(store.error != nil || expired ? " !" : "")" } ?? (store.loading ? "额度 …" : "额度 —")
-        status.button?.toolTip = store.error ?? "Token Tank · Codex 订阅额度"
+        status.button?.title = remaining.map { " \(Int($0.rounded()))%\(store.error != nil || expired ? " !" : "")" } ?? (store.loading ? " …" : " —")
+        status.button?.toolTip = store.error ?? remaining.map { "Token Tank · Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Token Tank · Codex 订阅额度"
+        status.button?.setAccessibilityLabel(remaining.map { "Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Codex 订阅额度")
     }
     @objc func toggle() {
         if popover.isShown { popover.performClose(nil) }
@@ -270,7 +446,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func wake() { store.refresh() }
 }
 
-if CommandLine.arguments.contains("--self-test") {
+if let index = CommandLine.arguments.firstIndex(of: "--render-info"), CommandLine.arguments.count > index + 1 {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let host = NSHostingView(rootView: UsageInfoView {}.environment(\.colorScheme, .light).background(Color(nsColor: .windowBackgroundColor)))
+    host.appearance = NSAppearance(named: .aqua)
+    let size = host.fittingSize
+    let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+    window.contentView = host
+    window.orderBack(nil)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    host.layoutSubtreeIfNeeded()
+    guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { exit(1) }
+    host.cacheDisplay(in: host.bounds, to: bitmap)
+    guard let data = bitmap.representation(using: .png, properties: [:]) else { exit(1) }
+    try data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+    window.orderOut(nil)
+} else if CommandLine.arguments.contains("--self-test") {
     let window = Window(usedPercent: 30, windowDurationMins: 60, resetsAt: 7200)
     precondition(window.start == Date(timeIntervalSince1970: 3600))
     precondition(window.remaining == 70)
@@ -283,16 +475,22 @@ if CommandLine.arguments.contains("--self-test") {
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.count > index + 1 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let store = Store()
+    let store = Store(automaticRefresh: false)
     do { store.snapshot = try CLIReader.read(); store.updatedAt = Date() }
     catch { store.error = error.localizedDescription }
-    let host = NSHostingView(rootView: PanelView(store: store).environment(\.colorScheme, .light))
-    host.appearance = NSAppearance(named: .aqua)
+    let dark = CommandLine.arguments.contains("--dark")
+    let host = NSHostingView(rootView: PanelView(store: store, expanded: CommandLine.arguments.contains("--expanded")).environment(\.colorScheme, dark ? .dark : .light))
+    host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 410, height: 690), styleMask: [.borderless], backing: .buffered, defer: false)
     window.contentView = host
     host.frame = window.contentView!.bounds
     window.orderBack(nil)
     RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+    host.layoutSubtreeIfNeeded()
+    let size = host.fittingSize
+    window.setContentSize(size)
+    host.frame = NSRect(origin: .zero, size: size)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
     host.layoutSubtreeIfNeeded()
     guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { exit(1) }
     host.cacheDisplay(in: host.bounds, to: bitmap)
