@@ -202,6 +202,32 @@ final class CLIReader {
     }
 }
 
+enum ProgressStyle: String, CaseIterable, Identifiable {
+    case calendarDays, rollingDays, continuous
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .calendarDays: return "按每日零点分段"
+        case .rollingDays: return "每 24 小时分段"
+        case .continuous: return "不分段"
+        }
+    }
+    func boundaries(start: Date?, end: Date?, calendar: Calendar = .current) -> [Date] {
+        guard self != .continuous, let start, let end, end > start else { return [] }
+        var points = [start]
+        var current = start
+        while points.count <= 512 {
+            let next: Date?
+            if self == .calendarDays { next = calendar.dateInterval(of: .day, for: current)?.end }
+            else { next = current.addingTimeInterval(86400) }
+            guard let next, next > current else { return [] }
+            if next >= end { points.append(end); return points }
+            points.append(next); current = next
+        }
+        return []
+    }
+}
+
 final class Store: ObservableObject {
     @Published var snapshot: Snapshot?
     @Published var updatedAt: Date?
@@ -217,6 +243,9 @@ final class Store: ObservableObject {
             onChange?()
         }
     }
+    @Published var progressStyle: ProgressStyle {
+        didSet { settings.set(progressStyle.rawValue, forKey: "progressStyle") }
+    }
     var onChange: (() -> Void)?
     private let settings: UserDefaults
     private var timer: Timer?
@@ -225,6 +254,7 @@ final class Store: ObservableObject {
         self.settings = settings
         showSetup = !settings.bool(forKey: "hasCompletedSetup")
         showPercentage = settings.object(forKey: "showPercentage") as? Bool ?? true
+        progressStyle = settings.string(forKey: "progressStyle").flatMap(ProgressStyle.init(rawValue:)) ?? .calendarDays
         guard automaticRefresh else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -325,28 +355,69 @@ func windowTitle(_ name: String, _ window: Window) -> String {
 struct UsageBar: View {
     let actual: Double?
     let theory: Double?
+    let window: Window
+    let style: ProgressStyle
+    private var boundaries: [Date] { style.boundaries(start: window.start, end: window.end) }
+    private func position(_ date: Date, width: CGFloat) -> CGFloat {
+        guard let start = window.start, let end = window.end, end > start else { return 0 }
+        return width * date.timeIntervalSince(start) / end.timeIntervalSince(start)
+    }
     var body: some View {
+        let points = boundaries
         GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.08))
+            ZStack(alignment: .topLeading) {
+                Capsule().fill(Color.primary.opacity(0.08)).frame(height: 8).offset(y: 4)
                 if let actual {
                     Capsule().fill(Color.accentColor)
-                        .frame(width: geometry.size.width * max(0, min(100, actual)) / 100)
+                        .frame(width: geometry.size.width * max(0, min(100, actual)) / 100, height: 8).offset(y: 4)
+                }
+                if points.count > 2 {
+                    ForEach(Array(points.dropFirst().dropLast().enumerated()), id: \.offset) { _, date in
+                        Rectangle().fill(Color(nsColor: .windowBackgroundColor))
+                            .frame(width: 2, height: 8)
+                            .offset(x: position(date, width: geometry.size.width) - 1, y: 4)
+                    }
                 }
                 if let theory {
                     RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.75))
-                        .frame(width: 2, height: 14)
+                        .frame(width: 2, height: 16)
                         .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * theory / 100 - 1)))
                 }
-            }.frame(height: 8).frame(maxHeight: .infinity)
-        }.frame(height: 16)
-        .accessibilityLabel("实际已用 \(percent(actual))，理论已用 \(percent(theory))")
+                if points.count > 1 {
+                    ForEach(0..<(points.count - 1), id: \.self) { index in
+                        let left = position(points[index], width: geometry.size.width)
+                        let right = position(points[index + 1], width: geometry.size.width)
+                        if right - left >= 20 {
+                            Text(label(index, points: points)).font(.system(size: 8.5)).foregroundStyle(.secondary)
+                                .lineLimit(1).minimumScaleFactor(0.8)
+                                .frame(width: right - left).offset(x: left, y: 21)
+                                .help("\(dateText(points[index])) 至 \(dateText(points[index + 1]))")
+                        }
+                    }
+                }
+            }
+        }.frame(height: points.count > 1 ? 35 : 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(style.title)，实际已用 \(percent(actual))，理论已用 \(percent(theory))")
+    }
+    private func label(_ index: Int, points: [Date]) -> String {
+        if style == .rollingDays {
+            let hours = points[index + 1].timeIntervalSince(points[index]) / 3600
+            if hours < 24 { return String(format: "%g小时", hours) }
+            return "第\(index + 1)天"
+        }
+        let formatter = DateFormatter()
+        let calendar = Calendar.current
+        let sameMonth = calendar.component(.month, from: points.first!) == calendar.component(.month, from: points.last!) && calendar.component(.year, from: points.first!) == calendar.component(.year, from: points.last!)
+        formatter.dateFormat = sameMonth ? "d日" : "M/d"
+        return formatter.string(from: points[index])
     }
 }
 struct WindowView: View {
     let title: String
     let window: Window
     let now: Date
+    let progressStyle: ProgressStyle
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
@@ -371,7 +442,7 @@ struct WindowView: View {
                 usageRow("理论", window.theoretical(now), window.theoretical(now).map { 100 - $0 })
             }.font(.subheadline).monospacedDigit()
             VStack(alignment: .leading, spacing: 5) {
-                UsageBar(actual: window.usedPercent, theory: window.theoretical(now))
+                UsageBar(actual: window.usedPercent, theory: window.theoretical(now), window: window, style: progressStyle)
                 HStack(spacing: 5) {
                     Circle().fill(Color.accentColor).frame(width: 5, height: 5)
                     Text("实际已用")
@@ -531,6 +602,11 @@ struct PanelView: View {
                     }
                 Menu {
                     Toggle("菜单栏显示百分比", isOn: $store.showPercentage)
+                    Picker("进度条分段", selection: $store.progressStyle) {
+                        ForEach(ProgressStyle.allCases) { style in
+                            Text(style.title).tag(style)
+                        }
+                    }.pickerStyle(.menu)
                     Divider()
                     Button("连接与登录引导…") { store.showSetup = true; store.refresh() }
                     Button("选择 Codex CLI…") { store.chooseCLI() }
@@ -578,8 +654,8 @@ struct PanelView: View {
             } else if let snapshot = store.snapshot {
                 ForEach(snapshot.buckets, id: \.0) { key, bucket in
                     let name = bucket.limitName ?? (key == "codex" ? "Codex" : key)
-                    if let primary = bucket.primary { WindowView(title: windowTitle(name, primary), window: primary, now: store.now) }
-                    if let secondary = bucket.secondary { WindowView(title: windowTitle(name, secondary), window: secondary, now: store.now) }
+                    if let primary = bucket.primary { WindowView(title: windowTitle(name, primary), window: primary, now: store.now, progressStyle: store.progressStyle) }
+                    if let secondary = bucket.secondary { WindowView(title: windowTitle(name, secondary), window: secondary, now: store.now, progressStyle: store.progressStyle) }
                 }
                 if snapshot.buckets.isEmpty { Text("当前账户未返回额度窗口。").foregroundStyle(.secondary) }
                 VStack(alignment: .leading, spacing: 8) {
@@ -724,21 +800,51 @@ if let index = CommandLine.arguments.firstIndex(of: "--render-icon-levels"), Com
     let preferences = UserDefaults(suiteName: suiteName)!
     defer { preferences.removePersistentDomain(forName: suiteName) }
     let settingsStore = Store(automaticRefresh: false, settings: preferences)
-    precondition(settingsStore.showSetup && settingsStore.showPercentage)
+    precondition(settingsStore.showSetup && settingsStore.showPercentage && settingsStore.progressStyle == .calendarDays)
     var changes = 0
     settingsStore.onChange = { changes += 1 }
     settingsStore.showPercentage = false
+    settingsStore.progressStyle = .continuous
     precondition(changes == 1)
     settingsStore.snapshot = sparse
     settingsStore.finishSetup()
     let reloaded = Store(automaticRefresh: false, settings: preferences)
-    precondition(!reloaded.showSetup && !reloaded.showPercentage)
-    print("PASS: window math, missing fields, quota icon levels, first-run and menu preferences")
+    precondition(!reloaded.showSetup && !reloaded.showPercentage && reloaded.progressStyle == .continuous)
+    preferences.set("unknown", forKey: "progressStyle")
+    precondition(Store(automaticRefresh: false, settings: preferences).progressStyle == .calendarDays)
+    let iso = ISO8601DateFormatter()
+    let start = iso.date(from: "2026-10-13T13:00:00+08:00")!
+    let end = start.addingTimeInterval(7 * 86400)
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    let equal = ProgressStyle.rollingDays.boundaries(start: start, end: end, calendar: calendar)
+    precondition(equal.count == 8)
+    precondition(zip(equal, equal.dropFirst()).allSatisfy { $1.timeIntervalSince($0) == 86400 })
+    let civil = ProgressStyle.calendarDays.boundaries(start: start, end: end, calendar: calendar)
+    precondition(civil.count == 9)
+    precondition(civil[1].timeIntervalSince(start) == 11 * 3600)
+    precondition(end.timeIntervalSince(civil[civil.count - 2]) == 13 * 3600)
+    let midnight = calendar.startOfDay(for: start)
+    precondition(ProgressStyle.calendarDays.boundaries(start: midnight, end: midnight.addingTimeInterval(7 * 86400), calendar: calendar).count == 8)
+    precondition(ProgressStyle.continuous.boundaries(start: start, end: end).isEmpty)
+    precondition(ProgressStyle.calendarDays.boundaries(start: nil, end: end).isEmpty)
+    let short = ProgressStyle.rollingDays.boundaries(start: start, end: start.addingTimeInterval(5 * 3600))
+    precondition(short.count == 2)
+    calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+    for (first, last, hours) in [("2026-03-08T00:00:00-08:00", "2026-03-09T00:00:00-07:00", 23), ("2026-11-01T00:00:00-07:00", "2026-11-02T00:00:00-08:00", 25)] {
+        let days = ProgressStyle.calendarDays.boundaries(start: iso.date(from: first), end: iso.date(from: last), calendar: calendar)
+        precondition(days.count == 2 && days[1].timeIntervalSince(days[0]) == Double(hours * 3600))
+    }
+    print("PASS: window math, missing fields, quota icon levels, preferences, progress boundaries and DST")
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.count > index + 1 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let store = Store(automaticRefresh: false)
+    let previewSuite = "org.sourcepowered.tokentank.preview." + UUID().uuidString
+    let previewSettings = UserDefaults(suiteName: previewSuite)!
+    defer { previewSettings.removePersistentDomain(forName: previewSuite) }
+    let store = Store(automaticRefresh: false, settings: previewSettings)
     store.showSetup = CommandLine.arguments.contains("--setup")
+    if let index = CommandLine.arguments.firstIndex(of: "--progress-style"), CommandLine.arguments.count > index + 1, let style = ProgressStyle(rawValue: CommandLine.arguments[index + 1]) { store.progressStyle = style }
     do {
         let inspection = try CLIReader.inspect()
         store.snapshot = inspection.snapshot; store.cliVersion = inspection.cliVersion; store.updatedAt = Date()
