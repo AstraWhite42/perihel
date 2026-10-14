@@ -2,37 +2,63 @@ import AppKit
 import SwiftUI
 import Darwin
 
+enum DepletionDirection: String, CaseIterable, Identifiable {
+    case counterclockwise, clockwise
+    var id: String { rawValue }
+    var title: String { self == .counterclockwise ? "逆时针熄灭" : "顺时针熄灭" }
+    func order(for index: Int) -> Int {
+        self == .counterclockwise ? 6 - index : index
+    }
+}
 enum EnergyMark {
     static func level(_ remaining: Double?) -> Int {
         guard let remaining, remaining.isFinite else { return -1 }
-        return Int(ceil(max(0, min(100, remaining)) / 12.5))
+        // A cell remains lit at exactly half capacity.
+        return Int(floor(max(0, min(100, remaining)) * 7 / 100 + 0.5 + 1e-10))
     }
-    static func image(remaining: Double? = 100) -> NSImage {
+    static func image(remaining: Double? = 100, direction: DepletionDirection = .counterclockwise) -> NSImage {
         let count = level(remaining)
         let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
-            for index in 0..<8 {
-                NSColor.black.withAlphaComponent(index < count ? 1 : 0.20).setStroke()
+            let step: CGFloat = 360 / 7
+            let gap: CGFloat = 9
+            func point(_ radius: CGFloat, _ angle: CGFloat) -> NSPoint {
+                let radians = angle * .pi / 180
+                return NSPoint(x: 10 + radius * cos(radians), y: 10 + radius * sin(radians))
+            }
+            func ink(_ index: Int) -> NSColor {
+                NSColor.black.withAlphaComponent(count >= 0 && direction.order(for: index) >= 7 - count ? 1 : 0.20)
+            }
+            for index in 0..<6 {
+                ink(index).setStroke()
                 let arc = NSBezierPath()
-                let start = 90 - CGFloat(index) * 37.5
-                arc.appendArc(withCenter: NSPoint(x: 10, y: 10), radius: 7.1, startAngle: start - 4, endAngle: start - 33.5, clockwise: true)
-                arc.lineWidth = 2.2
+                let start = 90 - CGFloat(index) * step
+                arc.appendArc(withCenter: NSPoint(x: 10, y: 10), radius: 7, startAngle: start - gap / 2, endAngle: start - step + gap / 2, clockwise: true)
+                arc.lineWidth = 2
                 arc.lineCapStyle = .butt
                 arc.stroke()
             }
-            NSColor.black.setFill()
-            let star = NSBezierPath()
-            star.move(to: NSPoint(x: 10, y: 13.7))
-            for point in [NSPoint(x: 11.1, y: 11.1), NSPoint(x: 13.7, y: 10), NSPoint(x: 11.1, y: 8.9), NSPoint(x: 10, y: 6.3), NSPoint(x: 8.9, y: 8.9), NSPoint(x: 6.3, y: 10), NSPoint(x: 8.9, y: 11.1)] { star.line(to: point) }
-            star.close(); star.fill()
+            let baseAngle = 90 + step - gap / 2
+            let base = point(7, baseAngle)
+            let radians = baseAngle * .pi / 180
+            let radial = NSPoint(x: cos(radians), y: sin(radians))
+            let tangent = NSPoint(x: sin(radians), y: -cos(radians))
+            let side: CGFloat = 3.8
+            let altitude = side * sqrt(3) / 2
             let arrow = NSBezierPath()
-            arrow.move(to: NSPoint(x: 5.5, y: 16.2))
-            arrow.line(to: NSPoint(x: 2.1, y: 14.8))
-            arrow.line(to: NSPoint(x: 5.1, y: 13))
-            arrow.close(); arrow.fill()
+            arrow.move(to: NSPoint(x: base.x + tangent.x * altitude, y: base.y + tangent.y * altitude))
+            arrow.line(to: NSPoint(x: base.x + radial.x * side / 2, y: base.y + radial.y * side / 2))
+            arrow.line(to: NSPoint(x: base.x - radial.x * side / 2, y: base.y - radial.y * side / 2))
+            arrow.close(); ink(6).setFill(); arrow.fill()
+            let star = NSBezierPath()
+            for (index, angle) in stride(from: CGFloat(90), to: CGFloat(-270), by: -45).enumerated() {
+                let vertex = point(index % 2 == 0 ? 3.4 : 1.3, angle)
+                if index == 0 { star.move(to: vertex) } else { star.line(to: vertex) }
+            }
+            star.close(); NSColor.black.setFill(); star.fill()
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = remaining.map { "近星点，剩余额度 \(Int($0.rounded()))%" } ?? "近星点，额度未知"
+        image.accessibilityDescription = remaining.map { "近星点，剩余额度 \(Int($0.rounded()))%，\(direction.title)" } ?? "近星点，额度未知"
         return image
     }
 }
@@ -206,6 +232,33 @@ final class CLIReader {
     }
 }
 
+enum MenuBarDisplay: String, CaseIterable, Identifiable {
+    case remaining, budget, iconOnly
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .remaining: return "剩余百分比"
+        case .budget: return "领先／落后百分比"
+        case .iconOnly: return "不显示百分比"
+        }
+    }
+    static func load(from settings: UserDefaults) -> MenuBarDisplay {
+        if let value = settings.string(forKey: "menuBarDisplay"), let mode = MenuBarDisplay(rawValue: value) { return mode }
+        return settings.object(forKey: "showPercentage") as? Bool == false ? .iconOnly : .remaining
+    }
+    func text(window: Window?, now: Date) -> String? {
+        switch self {
+        case .iconOnly: return ""
+        case .remaining: return window?.remaining.map { "\(Int($0.rounded()))%" }
+        case .budget:
+            guard let window, let actual = window.usedPercent, let theory = window.theoretical(now) else { return nil }
+            let difference = actual - theory
+            if abs(difference) < 0.05 { return "0.0%" }
+            return String(format: "%+.1f%%", difference)
+        }
+    }
+}
+
 enum AppTheme: String, CaseIterable, Identifiable {
     case readable, system
     var id: String { rawValue }
@@ -249,11 +302,14 @@ final class Store: ObservableObject {
     @Published var planType: String?
     @Published var setupIssue: SetupIssue?
     @Published var showSetup: Bool
-    @Published var showPercentage: Bool {
+    @Published var menuBarDisplay: MenuBarDisplay {
         didSet {
-            settings.set(showPercentage, forKey: "showPercentage")
+            settings.set(menuBarDisplay.rawValue, forKey: "menuBarDisplay")
             onChange?()
         }
+    }
+    @Published var depletionDirection: DepletionDirection {
+        didSet { settings.set(depletionDirection.rawValue, forKey: "depletionDirection"); onChange?() }
     }
     @Published var progressStyle: ProgressStyle {
         didSet { settings.set(progressStyle.rawValue, forKey: "progressStyle") }
@@ -269,7 +325,8 @@ final class Store: ObservableObject {
     init(automaticRefresh: Bool = true, settings: UserDefaults = .standard) {
         self.settings = settings
         showSetup = !settings.bool(forKey: "hasCompletedSetup")
-        showPercentage = settings.object(forKey: "showPercentage") as? Bool ?? true
+        menuBarDisplay = MenuBarDisplay.load(from: settings)
+        depletionDirection = settings.string(forKey: "depletionDirection").flatMap(DepletionDirection.init(rawValue:)) ?? .counterclockwise
         progressStyle = settings.string(forKey: "progressStyle").flatMap(ProgressStyle.init(rawValue:)) ?? .calendarDays
         theme = settings.string(forKey: "theme").flatMap(AppTheme.init(rawValue:)) ?? .system
         guard automaticRefresh else { return }
@@ -643,7 +700,7 @@ struct PanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(nsImage: EnergyMark.image(remaining: store.snapshot?.mainWindow?.remaining)).foregroundStyle(Color.accentColor)
+                Image(nsImage: EnergyMark.image(remaining: store.snapshot?.mainWindow?.remaining, direction: store.depletionDirection)).foregroundStyle(Color.accentColor)
                 Text("近星点").font(.headline).fixedSize()
                 Spacer(minLength: 4)
                 HStack(spacing: 4) {
@@ -667,7 +724,12 @@ struct PanelView: View {
                         ForEach(AppTheme.allCases) { theme in Text(theme.title).tag(theme) }
                     }.pickerStyle(.menu)
                     Divider()
-                    Toggle("菜单栏显示百分比", isOn: $store.showPercentage)
+                    Picker("能量格熄灭方向", selection: $store.depletionDirection) {
+                        ForEach(DepletionDirection.allCases) { direction in Text(direction.title).tag(direction) }
+                    }.pickerStyle(.menu)
+                    Picker("菜单栏显示", selection: $store.menuBarDisplay) {
+                        ForEach(MenuBarDisplay.allCases) { mode in Text(mode.title).tag(mode) }
+                    }.pickerStyle(.menu)
                     Picker("进度条分段", selection: $store.progressStyle) {
                         ForEach(ProgressStyle.allCases) { style in
                             Text(style.title).tag(style)
@@ -776,7 +838,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var status: NSStatusItem!
     var popover = NSPopover()
     private var themeUpdate: DispatchWorkItem?
+    private var focusObserversInstalled = false
     private var renderedLevel = -2
+    private var renderedDirection: DepletionDirection?
     init(store: Store = Store()) { self.store = store; super.init() }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -784,12 +848,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         status.button?.target = self; status.button?.action = #selector(toggle)
         status.button?.imagePosition = .imageLeading
         popover = makePopover()
+        installFocusObservers()
         store.onChange = { [weak self] in self?.updateTitle() }
         store.onThemeChange = { [weak self] in self?.scheduleThemeUpdate() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         updateTitle(); store.refresh()
         if store.showSetup {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.toggle() }
+        }
+    }
+    func installFocusObservers() {
+        guard !focusObserversInstalled else { return }
+        focusObserversInstalled = true
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDidDeactivate), name: NSApplication.didResignActiveNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(workspaceApplicationActivated(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(menuDidEndTracking), name: NSMenu.didEndTrackingNotification, object: nil)
+    }
+    func closeForExternalFocus() {
+        themeUpdate?.cancel()
+        themeUpdate = nil
+        if popover.isShown {
+            let animates = popover.animates
+            popover.animates = false
+            popover.close()
+            popover.animates = animates
+        }
+    }
+    @objc func applicationDidDeactivate() { closeForExternalFocus() }
+    @objc func workspaceApplicationActivated(_ notification: Notification) {
+        guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        closeForExternalFocus()
+    }
+    @objc func menuDidEndTracking() {
+        // Menu tracking may consume the outside click before the popover receives it.
+        DispatchQueue.main.async { [weak self] in
+            guard !NSApp.isActive,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+            self?.closeForExternalFocus()
         }
     }
     func makePopover() -> NSPopover {
@@ -828,27 +924,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let expired = store.snapshot?.mainWindow?.end.map { $0 <= Date() } ?? false
         let remaining = store.snapshot?.mainWindow?.remaining
         let level = EnergyMark.level(remaining)
-        if renderedLevel != level {
-            status.button?.image = EnergyMark.image(remaining: remaining)
+        if renderedLevel != level || renderedDirection != store.depletionDirection {
+            status.button?.image = EnergyMark.image(remaining: remaining, direction: store.depletionDirection)
             renderedLevel = level
+            renderedDirection = store.depletionDirection
         }
-        status.button?.title = store.showPercentage ? (remaining.map { " \(Int($0.rounded()))%\(store.error != nil || expired ? " !" : "")" } ?? (store.loading ? " …" : " —")) : ""
-        status.button?.toolTip = store.error ?? remaining.map { "近星点 · Codex 剩余额度 \(Int($0.rounded()))%" } ?? "近星点 · Codex 订阅额度"
-        status.button?.setAccessibilityLabel(remaining.map { "Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Codex 订阅额度")
+        let value = store.menuBarDisplay.text(window: store.snapshot?.mainWindow, now: store.now)
+        let warning = store.error != nil || expired ? " !" : ""
+        status.button?.title = store.menuBarDisplay == .iconOnly ? "" : " " + (value ?? (store.loading ? "…" : "—")) + warning
+        let budget = MenuBarDisplay.budget.text(window: store.snapshot?.mainWindow, now: store.now)
+        let description = remaining.map { "Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Codex 订阅额度"
+        let budgetDescription = budget.map { "，预算偏差 \($0)（正值领先，负值落后）" } ?? ""
+        status.button?.toolTip = store.error ?? "近星点 · " + description + budgetDescription
+        status.button?.setAccessibilityLabel(description + budgetDescription)
     }
     @objc func toggle() {
         if popover.isShown { popover.performClose(nil) }
         else if let button = status.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             NSApp.activate(ignoringOtherApps: true)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             if !store.loading { store.refresh() }
         }
     }
-    func popoverDidClose(_ notification: Notification) { store.endPanelSession() }
+    func popoverDidClose(_ notification: Notification) {
+        themeUpdate?.cancel()
+        themeUpdate = nil
+        store.endPanelSession()
+    }
     @objc func wake() { store.refresh() }
 }
 
-if CommandLine.arguments.contains("--theme-cycle-test") {
+if CommandLine.arguments.contains("--popover-focus-test") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let suite = "org.sourcepowered.tokentank.focus-test." + UUID().uuidString
+    let settings = UserDefaults(suiteName: suite)!
+    defer { settings.removePersistentDomain(forName: suite) }
+    let store = Store(automaticRefresh: false, settings: settings)
+    store.showSetup = false
+    let delegate = AppDelegate(store: store)
+    delegate.status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    delegate.status.button?.title = "焦点测试"
+    defer { delegate.popover.close(); NSStatusBar.system.removeStatusItem(delegate.status) }
+    delegate.popover = delegate.makePopover()
+    delegate.installFocusObservers()
+    NSApp.activate(ignoringOtherApps: true)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+    for iteration in 0..<3 {
+        delegate.popover.show(relativeTo: delegate.status.button!.bounds, of: delegate.status.button!, preferredEdge: .minY)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        guard delegate.popover.isShown else { fputs("FAIL: initial popover not shown\n", stderr); exit(1) }
+        let session = store.panelSession
+        delegate.scheduleThemeUpdate()
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: app)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        guard !delegate.popover.isShown else { fputs("FAIL: popover remained open\n", stderr); exit(1) }
+        guard store.panelSession != session else { fputs("FAIL: close session not reset\n", stderr); exit(1) }
+        print("PASS: focus loss closes popover and cancels pending reopen, cycle \(iteration + 1)")
+    }
+} else if CommandLine.arguments.contains("--theme-cycle-test") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let suite = "org.sourcepowered.tokentank.theme-test." + UUID().uuidString
@@ -889,7 +1023,7 @@ if CommandLine.arguments.contains("--theme-cycle-test") {
         (row == 0 ? NSColor(white: 0.12, alpha: 1) : NSColor.white).setFill()
         NSRect(x: 0, y: y, width: 600, height: 110).fill()
         for (column, value) in levels.enumerated() {
-            let icon = EnergyMark.image(remaining: value)
+            let icon = EnergyMark.image(remaining: value, direction: CommandLine.arguments.contains("--clockwise") ? .clockwise : .counterclockwise)
             icon.isTemplate = false
             let tinted = NSImage(size: icon.size)
             tinted.lockFocus()
@@ -925,11 +1059,20 @@ if CommandLine.arguments.contains("--theme-cycle-test") {
 } else if CommandLine.arguments.contains("--self-test") {
     precondition(EnergyMark.level(nil) == -1)
     precondition(EnergyMark.level(0) == 0)
-    precondition(EnergyMark.level(1) == 1)
-    precondition(EnergyMark.level(12.5) == 1)
-    precondition(EnergyMark.level(12.6) == 2)
-    precondition(EnergyMark.level(93) == 8)
-    precondition(EnergyMark.level(100) == 8)
+    precondition(EnergyMark.level(100) == 7)
+    for cells in 0..<7 {
+        let threshold = (Double(cells) + 0.5) * 100 / 7
+        precondition(EnergyMark.level(threshold - 0.001) == cells)
+        precondition(EnergyMark.level(threshold) == cells + 1)
+        precondition(EnergyMark.level(threshold + 0.001) == cells + 1)
+    }
+    precondition((0..<7).map { DepletionDirection.counterclockwise.order(for: $0) } == [6, 5, 4, 3, 2, 1, 0])
+    precondition((0..<7).map { DepletionDirection.clockwise.order(for: $0) } == [0, 1, 2, 3, 4, 5, 6])
+    let darkCells = 7 - EnergyMark.level(83)
+    precondition(darkCells == 1)
+    precondition(DepletionDirection.counterclockwise.order(for: 6) < darkCells)
+    precondition(DepletionDirection.clockwise.order(for: 0) < darkCells)
+    precondition(DepletionDirection.clockwise.order(for: 6) >= darkCells)
     let window = Window(usedPercent: 30, windowDurationMins: 60, resetsAt: 7200)
     precondition(window.start == Date(timeIntervalSince1970: 3600))
     precondition(window.remaining == 70)
@@ -946,21 +1089,32 @@ if CommandLine.arguments.contains("--theme-cycle-test") {
     let preferences = UserDefaults(suiteName: suiteName)!
     defer { preferences.removePersistentDomain(forName: suiteName) }
     let settingsStore = Store(automaticRefresh: false, settings: preferences)
-    precondition(settingsStore.showSetup && settingsStore.showPercentage && settingsStore.progressStyle == .calendarDays)
-    precondition(settingsStore.theme == .system)
+    precondition(settingsStore.showSetup && settingsStore.menuBarDisplay == .remaining && settingsStore.progressStyle == .calendarDays)
+    precondition(settingsStore.theme == .system && settingsStore.depletionDirection == .counterclockwise)
+    preferences.set(false, forKey: "showPercentage")
+    precondition(MenuBarDisplay.load(from: preferences) == .iconOnly)
+    preferences.set(true, forKey: "showPercentage")
+    precondition(MenuBarDisplay.load(from: preferences) == .remaining)
+    precondition(MenuBarDisplay.budget.text(window: window, now: Date(timeIntervalSince1970: 5400)) == "-20.0%")
+    precondition(MenuBarDisplay.budget.text(window: window, now: Date(timeIntervalSince1970: 4320)) == "+10.0%")
+    precondition(MenuBarDisplay.budget.text(window: window, now: Date(timeIntervalSince1970: 4680)) == "0.0%")
+    precondition(MenuBarDisplay.budget.text(window: nil, now: Date()) == nil)
+    precondition(MenuBarDisplay.iconOnly.text(window: window, now: Date()) == "")
     let session = settingsStore.panelSession
     settingsStore.endPanelSession()
     precondition(settingsStore.panelSession != session)
     var changes = 0
     settingsStore.onChange = { changes += 1 }
-    settingsStore.showPercentage = false
+    settingsStore.menuBarDisplay = .budget
     settingsStore.progressStyle = .continuous
     settingsStore.theme = .readable
     precondition(changes == 1)
+    settingsStore.depletionDirection = .clockwise
+    precondition(changes == 2)
     settingsStore.snapshot = sparse
     settingsStore.finishSetup()
     let reloaded = Store(automaticRefresh: false, settings: preferences)
-    precondition(!reloaded.showSetup && !reloaded.showPercentage && reloaded.progressStyle == .continuous && reloaded.theme == .readable)
+    precondition(!reloaded.showSetup && reloaded.menuBarDisplay == .budget && reloaded.progressStyle == .continuous && reloaded.theme == .readable && reloaded.depletionDirection == .clockwise)
     preferences.set("unknown", forKey: "theme")
     precondition(Store(automaticRefresh: false, settings: preferences).theme == .system)
     preferences.set("unknown", forKey: "progressStyle")

@@ -22,21 +22,35 @@ color(0.65, 0.72, 0.92, 0.14).setStroke()
 tile.lineWidth = 2
 tile.stroke()
 
-// Eight energy cells and a returning arrow express a replenishing quota cycle.
 let center = NSPoint(x: 512, y: 512)
-for index in 0..<8 {
-    let start = 90 - CGFloat(index) * 37.5
+let step: CGFloat = 360 / 7
+let gap: CGFloat = 9
+let ringRadius: CGFloat = 286
+let scale = ringRadius / 35
+func point(_ radius: CGFloat, _ angle: CGFloat) -> NSPoint {
+    let radians = angle * .pi / 180
+    return NSPoint(x: center.x + radius * cos(radians), y: center.y + radius * sin(radians))
+}
+for index in 0..<6 {
+    let start = 90 - CGFloat(index) * step
     let arc = NSBezierPath()
-    arc.appendArc(withCenter: center, radius: 286, startAngle: start - 4, endAngle: start - 33.5, clockwise: true)
-    arc.lineWidth = 66
+    arc.appendArc(withCenter: center, radius: ringRadius, startAngle: start - gap / 2, endAngle: start - step + gap / 2, clockwise: true)
+    arc.lineWidth = 10 * scale
     arc.lineCapStyle = .butt
-    (index < 6 ? color(0.68, 0.86, 1) : color(0.32, 0.39, 0.57)).setStroke()
+    color(0.68, 0.86, 1).setStroke()
     arc.stroke()
 }
+let baseAngle = 90 + step - gap / 2
+let base = point(ringRadius, baseAngle)
+let radians = baseAngle * .pi / 180
+let radial = NSPoint(x: cos(radians), y: sin(radians))
+let tangent = NSPoint(x: sin(radians), y: -cos(radians))
+let side: CGFloat = 19 * scale
+let altitude = side * sqrt(3) / 2
 let arrow = NSBezierPath()
-arrow.move(to: NSPoint(x: 330, y: 764))
-arrow.line(to: NSPoint(x: 193, y: 707))
-arrow.line(to: NSPoint(x: 314, y: 634))
+arrow.move(to: NSPoint(x: base.x + tangent.x * altitude, y: base.y + tangent.y * altitude))
+arrow.line(to: NSPoint(x: base.x + radial.x * side / 2, y: base.y + radial.y * side / 2))
+arrow.line(to: NSPoint(x: base.x - radial.x * side / 2, y: base.y - radial.y * side / 2))
 arrow.close()
 color(0.68, 0.86, 1).setFill()
 arrow.fill()
