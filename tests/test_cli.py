@@ -37,14 +37,14 @@ for line in sys.stdin:
         continue
     elif method == 'account/read':
         assert initialized
-        result = {'account': None if mode == 'logged_out' else {'type': 'apiKey' if mode == 'api_key' else 'chatgpt'}}
+        result = {'account': None if mode == 'logged_out' else {'type': 'apiKey' if mode == 'api_key' else 'chatgpt', 'planType': 'future_plan' if mode == 'unknown_plan' else 'prolite'}}
     elif method == 'account/rateLimits/read':
         if mode in ('old_cli', 'expired', 'network'):
             codes = {'old_cli': -32601, 'expired': -32000, 'network': -32000}
             messages = {'old_cli': 'Method not found', 'expired': '401 Unauthorized', 'network': 'Network unavailable'}
             print(json.dumps({'id': request['id'], 'error': {'code': codes[mode], 'message': messages[mode]}}), flush=True)
             continue
-        result = {'rateLimits': {'primary': {'usedPercent': 25, 'windowDurationMins': 10080, 'resetsAt': 1890000000}}, 'rateLimitResetCredits': {'availableCount': 2}}
+        result = {'rateLimits': {'planType': 'promax' if mode == 'bucket_plan' else None, 'primary': {'usedPercent': 25, 'windowDurationMins': 10080, 'resetsAt': 1890000000}}, 'rateLimitResetCredits': {'availableCount': 2}}
     else:
         raise AssertionError(method)
     print(json.dumps({'id': request['id'], 'result': result}), flush=True)
@@ -54,7 +54,9 @@ with tempfile.TemporaryDirectory(prefix='token-tank-cli-') as directory:
     cli.write_text('#!' + sys.executable + '\n' + fixture)
     cli.chmod(0o755)
     cases = [
-        ('ready', True, '75.0%'),
+        ('ready', True, 'Pro 100'),
+        ('unknown_plan', True, 'future_plan'),
+        ('bucket_plan', True, 'Pro 500'),
         ('logged_out', False, 'ChatGPT'),
         ('api_key', False, 'API Key'),
         ('old_cli', False, '更新 Codex CLI'),
