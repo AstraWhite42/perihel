@@ -73,6 +73,10 @@ struct Window: Codable {
         guard let end, let minutes = windowDurationMins, minutes > 0 else { return nil }
         return end.addingTimeInterval(-minutes * 60)
     }
+    func theoreticalAtMidnight(_ now: Date, calendar: Calendar = .current) -> Double? {
+        guard let midnight = calendar.dateInterval(of: .day, for: now)?.end else { return nil }
+        return theoretical(midnight)
+    }
     func theoretical(_ now: Date) -> Double? {
         guard let start, let minutes = windowDurationMins, minutes > 0 else { return nil }
         return max(0, min(100, now.timeIntervalSince(start) / (minutes * 60) * 100))
@@ -483,7 +487,7 @@ struct UsageBar: View {
                             Text(label(index, points: points)).font(.system(size: 8.5)).foregroundStyle(.secondary)
                                 .lineLimit(1).minimumScaleFactor(0.8)
                                 .frame(width: right - left).offset(x: left, y: 21)
-                                .help("\(dateText(points[index])) 至 \(dateText(points[index + 1]))")
+                                .help("开始：\(dateText(points[index]))\n结束：\(dateText(points[index + 1]))")
                         }
                     }
                 }
@@ -556,38 +560,51 @@ struct WindowView: View {
                                     .font(.system(size: 8, weight: .semibold))
                             }.fixedSize().contentShape(Rectangle())
                         }.buttonStyle(.plain)
-                            .help(showBudgetDetails ? "收起预算计算依据" : "查看实际与理论用量及计算公式")
+                            .help(showBudgetDetails ? "收起预算计算依据" : "查看实际与理论用量及差值")
                             .accessibilityLabel(showBudgetDetails ? "收起预算计算依据" : "展开预算计算依据")
                     }
                 }.font(.caption2).foregroundStyle(.secondary)
             }
             if showBudgetDetails, let actual = window.usedPercent, let theory = window.theoretical(now) {
                 Divider()
-            Grid(horizontalSpacing: 16, verticalSpacing: 6) {
+            Grid(horizontalSpacing: 10, verticalSpacing: 6) {
                 GridRow {
                     Text("用量").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("已用").frame(width: 78, alignment: .trailing)
-                    Text("剩余").frame(width: 78, alignment: .trailing)
+                    Text("已用").frame(width: 60, alignment: .trailing)
+                    Text("剩余").frame(width: 60, alignment: .trailing)
+                    HStack(spacing: 3) {
+                        Text("差值")
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 10))
+                    }.frame(width: 60, alignment: .trailing)
+                        .contentShape(Rectangle())
+                        .help("差值 = 当前实际已用 − 对应行的理论已用\n正值：领先预算\n负值：落后预算\n单位：百分点")
+                        .accessibilityLabel("差值，悬停查看计算说明")
                 }.font(.caption).foregroundStyle(.secondary)
                 usageRow("实际", window.usedPercent, window.remaining)
-                usageRow("理论", window.theoretical(now), window.theoretical(now).map { 100 - $0 })
+                usageRow("当前理论", theory, 100 - theory, difference: actual - theory)
+                let midnightTheory = window.theoreticalAtMidnight(now)
+                usageRow("今晚24时理论", midnightTheory, midnightTheory.map { 100 - $0 }, difference: midnightTheory.map { actual - $0 }, explanation: "按系统时区计算今晚 24 时的理论用量。\n沿用当前额度窗口的匀速预算。\n若窗口在此前结束，理论已用记为 100%。")
             }.font(.subheadline).monospacedDigit()
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("实际已用 − 理论已用")
-                    Text(String(format: "%.1f%% − %.1f%% = %@%.1f%%", actual, theory, actual - theory < -0.05 ? "−" : (actual - theory >= 0.05 ? "+" : ""), abs(actual - theory) < 0.05 ? 0 : abs(actual - theory)))
-                        .monospacedDigit()
-                    Text("正值领先，负值落后；差值单位为百分点。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }.font(.caption).foregroundStyle(.secondary)
             }
         }.padding(14).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
         .onAppear { if CommandLine.arguments.contains("--budget-details") { showBudgetDetails = true } }
     }
-    func usageRow(_ title: String, _ used: Double?, _ remaining: Double?) -> some View {
+    func usageRow(_ title: String, _ used: Double?, _ remaining: Double?, difference: Double? = nil, explanation: String? = nil) -> some View {
         GridRow {
-            Text(title).frame(maxWidth: .infinity, alignment: .leading)
-            Text(percent(used)).frame(width: 78, alignment: .trailing)
-            Text(percent(remaining)).frame(width: 78, alignment: .trailing)
+            HStack(spacing: 3) {
+                Text(title)
+                if explanation != nil {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .help(explanation ?? "")
+            Text(percent(used)).frame(width: 60, alignment: .trailing)
+            Text(percent(remaining)).frame(width: 60, alignment: .trailing)
+            Text(difference.map { abs($0) < 0.05 ? "0.0%" : String(format: "%+.1f%%", $0) } ?? "—")
+                .frame(width: 60, alignment: .trailing)
         }
     }
 }
@@ -934,7 +951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         status.button?.title = store.menuBarDisplay == .iconOnly ? "" : " " + (value ?? (store.loading ? "…" : "—")) + warning
         let budget = MenuBarDisplay.budget.text(window: store.snapshot?.mainWindow, now: store.now)
         let description = remaining.map { "Codex 剩余额度 \(Int($0.rounded()))%" } ?? "Codex 订阅额度"
-        let budgetDescription = budget.map { "，预算偏差 \($0)（正值领先，负值落后）" } ?? ""
+        let budgetDescription = budget.map { "\n预算偏差 \($0)\n正值领先，负值落后" } ?? ""
         status.button?.toolTip = store.error ?? "近星点 · " + description + budgetDescription
         status.button?.setAccessibilityLabel(description + budgetDescription)
     }
@@ -1079,6 +1096,16 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     precondition(window.theoretical(Date(timeIntervalSince1970: 5400)) == 50)
     precondition(window.theoretical(Date(timeIntervalSince1970: 0)) == 0)
     precondition(window.theoretical(Date(timeIntervalSince1970: 9000)) == 100)
+    var midnightCalendar = Calendar(identifier: .gregorian)
+    midnightCalendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+    let midnightFormatter = ISO8601DateFormatter()
+    let springStart = midnightFormatter.date(from: "2026-03-08T08:00:00Z")!
+    let springEnd = midnightFormatter.date(from: "2026-03-09T07:00:00Z")!
+    let midnightWindow = Window(usedPercent: 0, windowDurationMins: 48 * 60, resetsAt: springStart.addingTimeInterval(48 * 3600).timeIntervalSince1970)
+    precondition(abs(midnightWindow.theoreticalAtMidnight(springStart, calendar: midnightCalendar)! - 23.0 / 48 * 100) < 0.0001)
+    precondition(midnightWindow.theoreticalAtMidnight(springEnd, calendar: midnightCalendar) == 47.0 / 48 * 100)
+    precondition(window.theoreticalAtMidnight(springStart, calendar: midnightCalendar) == 100)
+
     precondition(planName("prolite") == "Pro 100")
     precondition(planName("future_plan") == "future_plan")
     precondition(planName("edu_plus") == "edu_plus")
