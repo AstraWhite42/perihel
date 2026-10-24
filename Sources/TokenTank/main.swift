@@ -350,9 +350,11 @@ final class Store: ObservableObject {
     var onChange: (() -> Void)?
     private let settings: UserDefaults
     private var timer: Timer?
+    let resetNews: ResetNewsFeed
     private var lastAttempt = Date.distantPast
     init(automaticRefresh: Bool = true, settings: UserDefaults = .standard) {
         self.settings = settings
+        resetNews = ResetNewsFeed(automaticRefresh: automaticRefresh)
         showSetup = !settings.bool(forKey: "hasCompletedSetup")
         menuBarDisplay = MenuBarDisplay.load(from: settings)
         depletionDirection = settings.string(forKey: "depletionDirection").flatMap(DepletionDirection.init(rawValue:)) ?? .counterclockwise
@@ -494,6 +496,7 @@ struct UsageBar: View {
     let style: ProgressStyle
     let resetCredits: [ResetCredit]
     let now: Date
+    let forecast: Date?
     private var boundaries: [Date] { style.boundaries(start: window.start, end: window.end) }
     private func position(_ date: Date, width: CGFloat) -> CGFloat {
         guard let start = window.start, let end = window.end, end > start else { return 0 }
@@ -522,6 +525,13 @@ struct UsageBar: View {
                     RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.75))
                         .frame(width: 2, height: 16)
                         .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * theory / 100 - 1)))
+                }
+                if let forecast {
+                    Image(systemName: "flag.fill").font(.system(size: 10)).foregroundStyle(.purple)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                        .help("重置预告参考时间\n\(dateText(forecast))\n此标记不是个人额度的确定重置时间。")
+                        .offset(x: position(forecast, width: geometry.size.width) - 8, y: -9)
                 }
                 ForEach(window.resetExpiryDates(resetCredits), id: \.self) { expiry in
                     let count = resetCredits.filter { $0.expiresAt == expiry.timeIntervalSince1970 }.count
@@ -568,11 +578,15 @@ struct UsageBar: View {
     }
 }
 struct WindowView: View {
+    @ObservedObject var resetNews: ResetNewsFeed
+    let showsResetNews: Bool
     let resetCredits: [ResetCredit]
     let title: String
     let window: Window
     let now: Date
     let progressStyle: ProgressStyle
+    private var notice: ResetNewsNotice? { showsResetNews && window.isWeekly ? resetNews.notice(now: now) : nil }
+    private var forecast: Date? { notice?.reference(in: window, now: now) }
     @ViewState private var showBudgetDetails = false
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -602,7 +616,7 @@ struct WindowView: View {
                     Text("重置 \(shortDate(window.end))")
                         .help("下次重置：\(dateText(window.end))")
                 }.font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                UsageBar(actual: window.usedPercent, theory: window.theoretical(now), window: window, style: progressStyle, resetCredits: resetCredits, now: now)
+                UsageBar(actual: window.usedPercent, theory: window.theoretical(now), window: window, style: progressStyle, resetCredits: resetCredits, now: now, forecast: forecast)
                 HStack(spacing: 5) {
                     Circle().fill(Color.accentColor).frame(width: 5, height: 5)
                     Text("实际已用")
@@ -633,6 +647,7 @@ struct WindowView: View {
                     }
                 }.font(.caption2).foregroundStyle(.secondary)
             }
+            if let notice { ResetNewsView(notice: notice, now: now) }
             if window.supportsBudgetDetails, showBudgetDetails, let actual = window.usedPercent, let theory = window.theoretical(now) {
                 Divider()
             Grid(horizontalSpacing: 10, verticalSpacing: 6) {
@@ -653,6 +668,10 @@ struct WindowView: View {
                 usageRow("当前理论", theory, 100 - theory, difference: actual - theory)
                 let midnightTheory = window.theoreticalAtMidnight(now)
                 usageRow("今晚24时理论", midnightTheory, midnightTheory.map { 100 - $0 }, difference: midnightTheory.map { actual - $0 }, explanation: "按系统时区计算今晚 24 时的理论用量。\n沿用当前额度窗口的匀速预算。\n若窗口在此前结束，理论已用记为 100%。")
+                if let forecast, let forecastTheory = window.theoretical(forecast) {
+                    usageRow(notice?.theoryTitle ?? "预告时点理论", forecastTheory, 100 - forecastTheory, difference: actual - forecastTheory,
+                             explanation: "按预告参考时间计算当前周窗口的理论用量。\n实际已用减去该值即为差值。\n具体重置安排以公告原文为准。")
+                }
             }.font(.subheadline).monospacedDigit()
             }
         }.padding(14).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
@@ -769,7 +788,7 @@ struct SetupView: View {
         }.padding(8).background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
     }
 }
-private typealias ViewState<Value> = SwiftUI.State<Value>
+typealias ViewState<Value> = SwiftUI.State<Value>
 struct PanelView: View {
     @ObservedObject var store: Store
     @ViewState private var contentHeight: CGFloat = 320
@@ -873,7 +892,7 @@ struct PanelView: View {
                 ForEach(snapshot.buckets, id: \.0) { key, bucket in
                     let name = bucket.limitName ?? (key == "codex" ? "Codex" : key)
                     ForEach(bucket.orderedWindows, id: \.0) { _, window in
-                        WindowView(resetCredits: snapshot.rateLimitResetCredits?.credits ?? [], title: windowTitle(name, window, plan: bucket.planType ?? store.planType), window: window, now: store.now, progressStyle: store.progressStyle).id(store.panelSession)
+                        WindowView(resetNews: store.resetNews, showsResetNews: key == "codex", resetCredits: snapshot.rateLimitResetCredits?.credits ?? [], title: windowTitle(name, window, plan: bucket.planType ?? store.planType), window: window, now: store.now, progressStyle: store.progressStyle).id(store.panelSession)
                     }
                 }
                 if snapshot.buckets.isEmpty { Text("当前账户未返回额度窗口。").foregroundStyle(.secondary) }
@@ -1147,7 +1166,17 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     guard let data = bitmap.representation(using: .png, properties: [:]) else { exit(1) }
     try data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
     window.orderOut(nil)
+} else if CommandLine.arguments.contains("--news-probe") {
+    let feed = ResetNewsFeed(automaticRefresh: true)
+    let deadline = Date().addingTimeInterval(20)
+    while feed.checkedAt == nil && !feed.failed && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    guard feed.checkedAt != nil else { fputs("重置消息读取失败\n", stderr); exit(1) }
+    print("Codex Resets 读取成功；当前消息：\(feed.notice(now: Date())?.title ?? "无待执行预告或有效动向")")
 } else if CommandLine.arguments.contains("--self-test") {
+    try testResetNews()
+    try testResetNewsTransport()
     let creditNow = Date(timeIntervalSince1970: 10000)
     precondition(creditTimeRemaining(nil, now: creditNow) == "剩余时间未知")
     precondition(creditTimeRemaining(creditNow, now: creditNow) == "已到期")
@@ -1282,7 +1311,7 @@ if CommandLine.arguments.contains("--popover-focus-test") {
         precondition(shortHours.count == 7)
         precondition(zip(shortHours, shortHours.dropFirst()).allSatisfy { $1 > $0 && $1.timeIntervalSince($0) <= 3600 })
     }
-    print("PASS: window math, missing fields, quota icon levels, preferences, progress boundaries and DST")
+    print("PASS: window math, quota icons, preferences, progress boundaries, DST and reset news")
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.count > index + 1 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
@@ -1298,6 +1327,9 @@ if CommandLine.arguments.contains("--popover-focus-test") {
         store.snapshot = inspection.snapshot; store.cliVersion = inspection.cliVersion; store.planType = inspection.planType; store.updatedAt = Date()
     }
     catch { store.error = error.localizedDescription }
+    if let fixtureIndex = CommandLine.arguments.firstIndex(of: "--news-fixture"), CommandLine.arguments.count > fixtureIndex + 1 {
+        try store.resetNews.accept(Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[fixtureIndex + 1])))
+    }
     let dark = CommandLine.arguments.contains("--dark")
     let host = NSHostingView(rootView: PanelView(store: store, expanded: CommandLine.arguments.contains("--expanded")).environment(\.colorScheme, dark ? .dark : .light))
     host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)

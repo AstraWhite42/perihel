@@ -16,7 +16,7 @@ enum AppVersion {
     static let bundleIdentifier = "$BUNDLE_ID"
 }
 SWIFT
-swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 Sources/TokenTank/main.swift .build/AppVersion.swift -o .build/TokenTank
+swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 Sources/TokenTank/*.swift .build/AppVersion.swift -o .build/TokenTank
 ICONSET="$PWD/.build/AppIcon.iconset"
 mkdir -p "$ICONSET"
 swift scripts/generate-icon.swift .build/AppIcon.png
