@@ -67,6 +67,8 @@ struct Window: Codable {
     let usedPercent: Double?
     let windowDurationMins: Double?
     let resetsAt: Double?
+    var isWeekly: Bool { windowDurationMins == 10080 }
+    var supportsBudgetDetails: Bool { windowDurationMins != 300 }
     var remaining: Double? { usedPercent.map { max(0, min(100, 100 - $0)) } }
     var end: Date? { resetsAt.map(Date.init(timeIntervalSince1970:)) }
     var start: Date? {
@@ -87,6 +89,12 @@ struct Bucket: Codable {
     let primary: Window?
     let secondary: Window?
     let planType: String?
+    var orderedWindows: [(String, Window)] {
+        let windows: [(String, Window)] = [("primary", primary), ("secondary", secondary)].compactMap { key, window in
+            window.map { (key, $0) }
+        }
+        return windows.filter { $0.1.isWeekly } + windows.filter { !$0.1.isWeekly }
+    }
 }
 struct ResetCredit: Codable { let expiresAt: Double? }
 struct Resets: Codable { let availableCount: Int?; let credits: [ResetCredit]? }
@@ -104,7 +112,12 @@ struct Snapshot: Codable {
         }
         return rateLimits.map { [("codex", $0)] } ?? []
     }
-    var mainWindow: Window? { buckets.first?.1.primary ?? buckets.first?.1.secondary }
+    var mainWindow: Window? { buckets.first?.1.orderedWindows.first?.1 }
+    func hasExpiredWindow(at now: Date) -> Bool {
+        buckets.contains { _, bucket in
+            bucket.orderedWindows.contains { _, window in window.end.map { $0 <= now } ?? false }
+        }
+    }
 }
 enum SetupIssue: String {
     case missingCLI, loginRequired, incompatibleCLI
@@ -274,19 +287,23 @@ enum ProgressStyle: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .calendarDays: return "按每日零点分段"
-        case .rollingDays: return "每 24 小时分段"
+        case .calendarDays: return "按自然时点分段"
+        case .rollingDays: return "按等分时长分段"
         case .continuous: return "不分段"
         }
     }
+    static func usesHourlySegments(start: Date, end: Date) -> Bool {
+        end.timeIntervalSince(start) <= 86400
+    }
     func boundaries(start: Date?, end: Date?, calendar: Calendar = .current) -> [Date] {
         guard self != .continuous, let start, let end, end > start else { return [] }
+        let hourly = Self.usesHourlySegments(start: start, end: end)
         var points = [start]
         var current = start
         while points.count <= 512 {
             let next: Date?
-            if self == .calendarDays { next = calendar.dateInterval(of: .day, for: current)?.end }
-            else { next = current.addingTimeInterval(86400) }
+            if self == .calendarDays { next = calendar.dateInterval(of: hourly ? .hour : .day, for: current)?.end }
+            else { next = current.addingTimeInterval(hourly ? 3600 : 86400) }
             guard let next, next > current else { return [] }
             if next >= end { points.append(end); return points }
             points.append(next); current = next
@@ -337,7 +354,7 @@ final class Store: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.now = Date()
-            let expired = self.snapshot?.mainWindow?.end.map { $0 <= self.now } ?? false
+            let expired = self.snapshot?.hasExpiredWindow(at: self.now) ?? false
             if self.now.timeIntervalSince(self.lastAttempt) >= (expired ? 30 : 120) { self.refresh() }
             self.onChange?()
         }
@@ -497,7 +514,9 @@ struct UsageBar: View {
         .accessibilityLabel("\(style.title)，实际已用 \(percent(actual))，理论已用 \(percent(theory))")
     }
     private func label(_ index: Int, points: [Date]) -> String {
+        let hourly = ProgressStyle.usesHourlySegments(start: points.first!, end: points.last!)
         if style == .rollingDays {
+            if hourly { return "第\(index + 1)小时" }
             let hours = points[index + 1].timeIntervalSince(points[index]) / 3600
             if hours < 24 { return String(format: "%g小时", hours) }
             return "第\(index + 1)天"
@@ -505,7 +524,7 @@ struct UsageBar: View {
         let formatter = DateFormatter()
         let calendar = Calendar.current
         let sameMonth = calendar.component(.month, from: points.first!) == calendar.component(.month, from: points.last!) && calendar.component(.year, from: points.first!) == calendar.component(.year, from: points.last!)
-        formatter.dateFormat = sameMonth ? "d日" : "M/d"
+        formatter.dateFormat = hourly ? "HH:mm" : (sameMonth ? "d日" : "M/d")
         return formatter.string(from: points[index])
     }
 }
@@ -552,6 +571,7 @@ struct WindowView: View {
                     Spacer(minLength: 8)
                     if let actual = window.usedPercent, let theory = window.theoretical(now) {
                         let difference = actual - theory
+                        if window.supportsBudgetDetails {
                         Button { showBudgetDetails.toggle() } label: {
                             HStack(spacing: 4) {
                                 Text(abs(difference) < 0.05 ? "预算持平" : String(format: "%@预算 %.1f%%", difference > 0 ? "领先" : "落后", abs(difference)))
@@ -562,10 +582,14 @@ struct WindowView: View {
                         }.buttonStyle(.plain)
                             .help(showBudgetDetails ? "收起预算计算依据" : "查看实际与理论用量及差值")
                             .accessibilityLabel(showBudgetDetails ? "收起预算计算依据" : "展开预算计算依据")
+                        } else {
+                            Text(abs(difference) < 0.05 ? "预算持平" : String(format: "%@预算 %.1f%%", difference > 0 ? "领先" : "落后", abs(difference)))
+                                .monospacedDigit()
+                        }
                     }
                 }.font(.caption2).foregroundStyle(.secondary)
             }
-            if showBudgetDetails, let actual = window.usedPercent, let theory = window.theoretical(now) {
+            if window.supportsBudgetDetails, showBudgetDetails, let actual = window.usedPercent, let theory = window.theoretical(now) {
                 Divider()
             Grid(horizontalSpacing: 10, verticalSpacing: 6) {
                 GridRow {
@@ -804,10 +828,12 @@ struct PanelView: View {
             } else if let snapshot = store.snapshot {
                 ForEach(snapshot.buckets, id: \.0) { key, bucket in
                     let name = bucket.limitName ?? (key == "codex" ? "Codex" : key)
-                    if let primary = bucket.primary { WindowView(title: windowTitle(name, primary, plan: bucket.planType ?? store.planType), window: primary, now: store.now, progressStyle: store.progressStyle).id(store.panelSession) }
-                    if let secondary = bucket.secondary { WindowView(title: windowTitle(name, secondary, plan: bucket.planType ?? store.planType), window: secondary, now: store.now, progressStyle: store.progressStyle).id(store.panelSession) }
+                    ForEach(bucket.orderedWindows, id: \.0) { _, window in
+                        WindowView(title: windowTitle(name, window, plan: bucket.planType ?? store.planType), window: window, now: store.now, progressStyle: store.progressStyle).id(store.panelSession)
+                    }
                 }
                 if snapshot.buckets.isEmpty { Text("当前账户未返回额度窗口。").foregroundStyle(.secondary) }
+                if snapshot.rateLimitResetCredits != nil {
                 VStack(alignment: .leading, spacing: 8) {
                     Button { showCredits.toggle() } label: {
                         HStack {
@@ -841,6 +867,7 @@ struct PanelView: View {
                         }
                     }
                 }.padding(.horizontal, 2)
+                }
             } else if store.error == nil {
                 Text("正在读取本机 Codex 账户额度…").foregroundStyle(.secondary).padding(.vertical, 24)
             }
@@ -938,7 +965,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: update)
     }
     func updateTitle() {
-        let expired = store.snapshot?.mainWindow?.end.map { $0 <= Date() } ?? false
+        let expired = store.snapshot?.hasExpiredWindow(at: store.now) ?? false
         let remaining = store.snapshot?.mainWindow?.remaining
         let level = EnergyMark.level(remaining)
         if renderedLevel != level || renderedDirection != store.depletionDirection {
@@ -1110,6 +1137,20 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     precondition(planName("future_plan") == "future_plan")
     precondition(planName("edu_plus") == "edu_plus")
     precondition(planName(nil) == "套餐未知")
+    let week = Window(usedPercent: 25, windowDurationMins: 10080, resetsAt: 20000)
+    let fiveHours = Window(usedPercent: 90, windowDurationMins: 300, resetsAt: 10000)
+    let dual = Snapshot(rateLimits: Bucket(limitName: nil, primary: fiveHours, secondary: week, planType: "plus"), rateLimitsByLimitId: nil, rateLimitResetCredits: nil)
+    precondition(dual.mainWindow?.usedPercent == 25)
+    precondition(dual.buckets[0].1.orderedWindows.map { $0.0 } == ["secondary", "primary"])
+    precondition(!dual.hasExpiredWindow(at: Date(timeIntervalSince1970: 9999)))
+    precondition(dual.hasExpiredWindow(at: Date(timeIntervalSince1970: 10000)))
+    let reversed = Snapshot(rateLimits: Bucket(limitName: nil, primary: week, secondary: fiveHours, planType: "plus"), rateLimitsByLimitId: nil, rateLimitResetCredits: nil)
+    precondition(reversed.mainWindow?.usedPercent == 25 && reversed.hasExpiredWindow(at: Date(timeIntervalSince1970: 10000)))
+    let shortOnly = Bucket(limitName: nil, primary: nil, secondary: fiveHours, planType: nil)
+    precondition(shortOnly.orderedWindows.first?.1.windowDurationMins == 300)
+    precondition(!fiveHours.supportsBudgetDetails && week.supportsBudgetDetails)
+    let multiple = Snapshot(rateLimits: nil, rateLimitsByLimitId: ["codex": Bucket(limitName: nil, primary: week, secondary: nil, planType: nil), "other": shortOnly], rateLimitResetCredits: nil)
+    precondition(multiple.hasExpiredWindow(at: Date(timeIntervalSince1970: 10000)))
     let sparse = try JSONDecoder().decode(Snapshot.self, from: Data("{\"rateLimitsByLimitId\":{},\"rateLimitResetCredits\":null}".utf8))
     precondition(sparse.buckets.isEmpty)
     let suiteName = "org.sourcepowered.tokentank.tests." + UUID().uuidString
@@ -1163,11 +1204,25 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     precondition(ProgressStyle.continuous.boundaries(start: start, end: end).isEmpty)
     precondition(ProgressStyle.calendarDays.boundaries(start: nil, end: end).isEmpty)
     let short = ProgressStyle.rollingDays.boundaries(start: start, end: start.addingTimeInterval(5 * 3600))
-    precondition(short.count == 2)
+    precondition(short.count == 6)
+    precondition(zip(short, short.dropFirst()).allSatisfy { $1.timeIntervalSince($0) == 3600 })
+    let offsetStart = iso.date(from: "2026-10-13T22:30:00+08:00")!
+    let hourly = ProgressStyle.calendarDays.boundaries(start: offsetStart, end: offsetStart.addingTimeInterval(5 * 3600), calendar: calendar)
+    precondition(hourly.count == 7)
+    precondition(hourly[1].timeIntervalSince(offsetStart) == 1800)
+    precondition(hourly.last!.timeIntervalSince(hourly[hourly.count - 2]) == 1800)
+    precondition(ProgressStyle.calendarDays.boundaries(start: start, end: start.addingTimeInterval(5 * 3600), calendar: calendar).count == 6)
+    precondition(ProgressStyle.rollingDays.boundaries(start: start, end: start.addingTimeInterval(24 * 3600)).count == 25)
+    precondition(ProgressStyle.rollingDays.boundaries(start: start, end: start.addingTimeInterval(25 * 3600)).count == 3)
     calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
     for (first, last, hours) in [("2026-03-08T00:00:00-08:00", "2026-03-09T00:00:00-07:00", 23), ("2026-11-01T00:00:00-07:00", "2026-11-02T00:00:00-08:00", 25)] {
-        let days = ProgressStyle.calendarDays.boundaries(start: iso.date(from: first), end: iso.date(from: last), calendar: calendar)
-        precondition(days.count == 2 && days[1].timeIntervalSince(days[0]) == Double(hours * 3600))
+        let dayStart = iso.date(from: first)!
+        let dayEnd = iso.date(from: last)!
+        let days = ProgressStyle.calendarDays.boundaries(start: dayStart, end: dayEnd.addingTimeInterval(6 * 86400), calendar: calendar)
+        precondition(days[1] == dayEnd && days[1].timeIntervalSince(days[0]) == Double(hours * 3600))
+        let shortHours = ProgressStyle.calendarDays.boundaries(start: dayStart.addingTimeInterval(1800), end: dayStart.addingTimeInterval(5.5 * 3600), calendar: calendar)
+        precondition(shortHours.count == 7)
+        precondition(zip(shortHours, shortHours.dropFirst()).allSatisfy { $1 > $0 && $1.timeIntervalSince($0) <= 3600 })
     }
     print("PASS: window math, missing fields, quota icon levels, preferences, progress boundaries and DST")
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.count > index + 1 {
