@@ -75,6 +75,14 @@ struct Window: Codable {
         guard let end, let minutes = windowDurationMins, minutes > 0 else { return nil }
         return end.addingTimeInterval(-minutes * 60)
     }
+    func resetExpiryDates(_ credits: [ResetCredit]) -> [Date] {
+        guard let start, let end, end > start else { return [] }
+        return Array(Set(credits.compactMap { credit -> Date? in
+            guard let timestamp = credit.expiresAt, timestamp.isFinite else { return nil }
+            let date = Date(timeIntervalSince1970: timestamp)
+            return date >= start && date <= end ? date : nil
+        })).sorted()
+    }
     func theoreticalAtMidnight(_ now: Date, calendar: Calendar = .current) -> Double? {
         guard let midnight = calendar.dateInterval(of: .day, for: now)?.end else { return nil }
         return theoretical(midnight)
@@ -440,6 +448,23 @@ func countdown(_ end: Date?, _ now: Date) -> String {
     if seconds < 86400 { return "\(seconds / 3600) 小时 \(seconds / 60 % 60) 分" }
     return "\(seconds / 86400) 天 \(seconds / 3600 % 24) 小时 \(seconds / 60 % 60) 分"
 }
+func creditTimeRemaining(_ expiry: Date?, now: Date) -> String {
+    guard let expiry else { return "剩余时间未知" }
+    guard expiry > now else { return "已到期" }
+    return "剩余 " + countdown(expiry, now)
+}
+func creditExpirySummary(_ expiry: Date, now: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = Calendar.current.component(.year, from: expiry) == Calendar.current.component(.year, from: now) ? "M/d HH:mm" : "yyyy/M/d HH:mm"
+    let seconds = Int(expiry.timeIntervalSince(now))
+    let relative: String
+    if seconds <= 0 { relative = "已到期" }
+    else if seconds < 60 { relative = "不足1分钟" }
+    else if seconds < 3600 { relative = "\(seconds / 60)分后" }
+    else if seconds < 86400 { relative = "\(seconds / 3600)时\(seconds / 60 % 60)分后" }
+    else { relative = "\(seconds / 86400)天\(seconds / 3600 % 24)时后" }
+    return formatter.string(from: expiry) + " · " + relative
+}
 func planName(_ raw: String?) -> String {
     guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "套餐未知" }
     let names = [
@@ -467,6 +492,8 @@ struct UsageBar: View {
     let theory: Double?
     let window: Window
     let style: ProgressStyle
+    let resetCredits: [ResetCredit]
+    let now: Date
     private var boundaries: [Date] { style.boundaries(start: window.start, end: window.end) }
     private func position(_ date: Date, width: CGFloat) -> CGFloat {
         guard let start = window.start, let end = window.end, end > start else { return 0 }
@@ -496,6 +523,18 @@ struct UsageBar: View {
                         .frame(width: 2, height: 16)
                         .offset(x: max(0, min(geometry.size.width - 2, geometry.size.width * theory / 100 - 1)))
                 }
+                ForEach(window.resetExpiryDates(resetCredits), id: \.self) { expiry in
+                    let count = resetCredits.filter { $0.expiresAt == expiry.timeIntervalSince1970 }.count
+                    Image(systemName: "diamond.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Color.orange)
+                        .shadow(color: Color(nsColor: .windowBackgroundColor), radius: 1)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                        .help("重置机会到期：\(count) 次\n到期时间：\(dateText(expiry))\n\(creditTimeRemaining(expiry, now: now))")
+                        .accessibilityLabel("\(count) 次重置机会，\(dateText(expiry))到期，\(creditTimeRemaining(expiry, now: now))")
+                        .offset(x: position(expiry, width: geometry.size.width) - 8)
+                }
                 if points.count > 1 {
                     ForEach(0..<(points.count - 1), id: \.self) { index in
                         let left = position(points[index], width: geometry.size.width)
@@ -510,7 +549,7 @@ struct UsageBar: View {
                 }
             }
         }.frame(height: points.count > 1 ? 35 : 16)
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(style.title)，实际已用 \(percent(actual))，理论已用 \(percent(theory))")
     }
     private func label(_ index: Int, points: [Date]) -> String {
@@ -529,6 +568,7 @@ struct UsageBar: View {
     }
 }
 struct WindowView: View {
+    let resetCredits: [ResetCredit]
     let title: String
     let window: Window
     let now: Date
@@ -562,12 +602,16 @@ struct WindowView: View {
                     Text("重置 \(shortDate(window.end))")
                         .help("下次重置：\(dateText(window.end))")
                 }.font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                UsageBar(actual: window.usedPercent, theory: window.theoretical(now), window: window, style: progressStyle)
+                UsageBar(actual: window.usedPercent, theory: window.theoretical(now), window: window, style: progressStyle, resetCredits: resetCredits, now: now)
                 HStack(spacing: 5) {
                     Circle().fill(Color.accentColor).frame(width: 5, height: 5)
                     Text("实际已用")
                     Text("·")
                     Text("理论刻度")
+                    if !window.resetExpiryDates(resetCredits).isEmpty {
+                        Image(systemName: "diamond.fill").font(.system(size: 6)).foregroundStyle(.orange)
+                        Text("机会到期")
+                    }
                     Spacer(minLength: 8)
                     if let actual = window.usedPercent, let theory = window.theoretical(now) {
                         let difference = actual - theory
@@ -829,7 +873,7 @@ struct PanelView: View {
                 ForEach(snapshot.buckets, id: \.0) { key, bucket in
                     let name = bucket.limitName ?? (key == "codex" ? "Codex" : key)
                     ForEach(bucket.orderedWindows, id: \.0) { _, window in
-                        WindowView(title: windowTitle(name, window, plan: bucket.planType ?? store.planType), window: window, now: store.now, progressStyle: store.progressStyle).id(store.panelSession)
+                        WindowView(resetCredits: snapshot.rateLimitResetCredits?.credits ?? [], title: windowTitle(name, window, plan: bucket.planType ?? store.planType), window: window, now: store.now, progressStyle: store.progressStyle).id(store.panelSession)
                     }
                 }
                 if snapshot.buckets.isEmpty { Text("当前账户未返回额度窗口。").foregroundStyle(.secondary) }
@@ -841,9 +885,10 @@ struct PanelView: View {
                             Text(snapshot.rateLimitResetCredits?.availableCount.map { "\($0) 次" } ?? "暂无数据").font(.subheadline.weight(.semibold))
                             Spacer()
                             if let nearestExpiry {
-                                Text("最近到期 \(shortDate(nearestExpiry))")
+                                Text("最近到期 \(creditExpirySummary(nearestExpiry, now: store.now))")
                                     .font(.caption).foregroundStyle(.secondary)
-                                    .lineLimit(1).help(dateText(nearestExpiry))
+                                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
+                                    .help("到期时间：\(dateText(nearestExpiry))\n\(creditTimeRemaining(nearestExpiry, now: store.now))")
                             }
                             if let credits = snapshot.rateLimitResetCredits?.credits, !credits.isEmpty {
                                 Image(systemName: showCredits ? "chevron.up" : "chevron.down")
@@ -862,7 +907,9 @@ struct PanelView: View {
                                 Text("重置机会 \(index + 1)").foregroundStyle(.secondary)
                                 Spacer()
                                 let expiry = credit.expiresAt.map(Date.init(timeIntervalSince1970:))
-                                Text(expiry.map { shortDate($0) + " 到期" } ?? "未提供到期时间").help(dateText(expiry))
+                                Text(expiry.map { creditExpirySummary($0, now: store.now) } ?? "未提供到期时间")
+                                    .lineLimit(1).minimumScaleFactor(0.85)
+                                    .help("到期时间：\(dateText(expiry))\n\(creditTimeRemaining(expiry, now: store.now))")
                             }.font(.caption).monospacedDigit()
                         }
                     }
@@ -1101,6 +1148,12 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     try data.write(to: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
     window.orderOut(nil)
 } else if CommandLine.arguments.contains("--self-test") {
+    let creditNow = Date(timeIntervalSince1970: 10000)
+    precondition(creditTimeRemaining(nil, now: creditNow) == "剩余时间未知")
+    precondition(creditTimeRemaining(creditNow, now: creditNow) == "已到期")
+    precondition(creditTimeRemaining(creditNow.addingTimeInterval(-60), now: creditNow) == "已到期")
+    precondition(creditTimeRemaining(creditNow.addingTimeInterval(30), now: creditNow) == "剩余 不到 1 分钟")
+    precondition(creditTimeRemaining(creditNow.addingTimeInterval(90060), now: creditNow) == "剩余 1 天 1 小时 1 分")
     precondition(EnergyMark.level(nil) == -1)
     precondition(EnergyMark.level(0) == 0)
     precondition(EnergyMark.level(100) == 7)
@@ -1149,6 +1202,11 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     let shortOnly = Bucket(limitName: nil, primary: nil, secondary: fiveHours, planType: nil)
     precondition(shortOnly.orderedWindows.first?.1.windowDurationMins == 300)
     precondition(!fiveHours.supportsBudgetDetails && week.supportsBudgetDetails)
+    let markerWindow = Window(usedPercent: 0, windowDurationMins: 300, resetsAt: 20000)
+    let markerCredits = [ResetCredit(expiresAt: nil), ResetCredit(expiresAt: 1999), ResetCredit(expiresAt: 2000), ResetCredit(expiresAt: 10000), ResetCredit(expiresAt: 10000), ResetCredit(expiresAt: 20000), ResetCredit(expiresAt: 20001)]
+    precondition(markerWindow.resetExpiryDates(markerCredits).map { $0.timeIntervalSince1970 } == [2000, 10000, 20000])
+    precondition(Window(usedPercent: nil, windowDurationMins: nil, resetsAt: nil).resetExpiryDates(markerCredits).isEmpty)
+
     let multiple = Snapshot(rateLimits: nil, rateLimitsByLimitId: ["codex": Bucket(limitName: nil, primary: week, secondary: nil, planType: nil), "other": shortOnly], rateLimitResetCredits: nil)
     precondition(multiple.hasExpiredWindow(at: Date(timeIntervalSince1970: 10000)))
     let sparse = try JSONDecoder().decode(Snapshot.self, from: Data("{\"rateLimitsByLimitId\":{},\"rateLimitResetCredits\":null}".utf8))
