@@ -92,23 +92,9 @@ open "dist/近星点.app"
 "dist/近星点.app/Contents/MacOS/perihel" --render-icon-levels /tmp/icons.png
 ```
 
-## 验证
+## 诊断
 
-```sh
-"dist/近星点.app/Contents/MacOS/perihel" --self-test
-python3 tests/test_cli.py
-"dist/近星点.app/Contents/MacOS/perihel" --theme-cycle-test
-"dist/近星点.app/Contents/MacOS/perihel" --popover-focus-test
-"dist/近星点.app/Contents/MacOS/perihel" --probe
-```
-
-自检覆盖时间窗口、额度分格和设置持久化。模拟 CLI 测试覆盖缺少 CLI、无登录、API Key 登录、接口不兼容、凭据失效、网络故障及正常读取，不使用真实凭据。`--probe` 验证本机账户读取，只输出额度摘要。开发命令可用 `--cli-path /绝对路径/codex` 指定隔离的 CLI；不会保存该参数。
-
-`--theme-cycle-test` 需要图形桌面会话，会短暂显示测试菜单栏图标，连续切换主题并检查窗口尺寸是否漂移。使用隔离偏好和固定数据，不访问登录凭据。主题切换会重新创建系统弹窗，避免复用旧的安全区域和窗口框架几何信息。
-
-`--popover-focus-test` 使用隔离偏好验证失焦后关闭弹窗、取消延迟重开及再次打开。需要图形桌面会话，不访问登录凭据。
-
-`--news-probe` 可独立验证消息接口。渲染预览时可用 `--news-fixture /绝对路径/status.json` 注入符合接口结构的本地模拟消息；常规预览不请求消息接口。`--self-test` 覆盖预告、动向、过期、重置机会发放、窗口范围和 HTTP 错误状态。
+`--probe` 读取本机账户并输出额度摘要，可用 `--cli-path /绝对路径/codex` 指定本次运行使用的 CLI。`--news-probe` 单独检查重置消息接口。渲染预览时可用 `--news-fixture /绝对路径/status.json` 载入本地消息样例。
 
 ## 作者
 
