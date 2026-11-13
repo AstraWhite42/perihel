@@ -1,4 +1,4 @@
-# 近星点
+# 近星点（perihel）
 
 原生 macOS 菜单栏 Codex 订阅额度工具，用于比较实际消耗与匀速预算，关注当前、今晚 24 时及公开重置预告时点的用量进度。
 
@@ -86,20 +86,20 @@ open "dist/近星点.app"
 图标由 `scripts/generate-icon.swift` 绘制，构建脚本生成各尺寸 PNG 和 ICNS 并打包。开发预览支持：
 
 ```sh
-"dist/近星点.app/Contents/MacOS/TokenTank" --render-preview /tmp/panel.png --dark --expanded
-"dist/近星点.app/Contents/MacOS/TokenTank" --render-preview /tmp/setup.png --setup
-"dist/近星点.app/Contents/MacOS/TokenTank" --render-info /tmp/info.png
-"dist/近星点.app/Contents/MacOS/TokenTank" --render-icon-levels /tmp/icons.png
+"dist/近星点.app/Contents/MacOS/perihel" --render-preview /tmp/panel.png --dark --expanded
+"dist/近星点.app/Contents/MacOS/perihel" --render-preview /tmp/setup.png --setup
+"dist/近星点.app/Contents/MacOS/perihel" --render-info /tmp/info.png
+"dist/近星点.app/Contents/MacOS/perihel" --render-icon-levels /tmp/icons.png
 ```
 
 ## 验证
 
 ```sh
-"dist/近星点.app/Contents/MacOS/TokenTank" --self-test
+"dist/近星点.app/Contents/MacOS/perihel" --self-test
 python3 tests/test_cli.py
-"dist/近星点.app/Contents/MacOS/TokenTank" --theme-cycle-test
-"dist/近星点.app/Contents/MacOS/TokenTank" --popover-focus-test
-"dist/近星点.app/Contents/MacOS/TokenTank" --probe
+"dist/近星点.app/Contents/MacOS/perihel" --theme-cycle-test
+"dist/近星点.app/Contents/MacOS/perihel" --popover-focus-test
+"dist/近星点.app/Contents/MacOS/perihel" --probe
 ```
 
 自检覆盖时间窗口、额度分格和设置持久化。模拟 CLI 测试覆盖缺少 CLI、无登录、API Key 登录、接口不兼容、凭据失效、网络故障及正常读取，不使用真实凭据。`--probe` 验证本机账户读取，只输出额度摘要。开发命令可用 `--cli-path /绝对路径/codex` 指定隔离的 CLI；不会保存该参数。

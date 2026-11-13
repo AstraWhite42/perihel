@@ -10,7 +10,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 app = root / 'dist/近星点.app'
-binary = app / 'Contents/MacOS/TokenTank'
+binary = app / 'Contents/MacOS/perihel'
 version = json.loads((root / 'version.json').read_text())
 with (app / 'Contents/Info.plist').open('rb') as source:
     plist = plistlib.load(source)
@@ -20,7 +20,7 @@ assert plist['CFBundleVersion'] == str(version['build'])
 
 fixture = r'''
 import json, os, sys
-mode = os.environ['TOKEN_TANK_FIXTURE']
+mode = os.environ['PERIHEL_FIXTURE']
 if sys.argv[1] == '--version':
     print('not-codex' if mode == 'invalid' else 'codex-cli 0.149.0')
     sys.exit(0)
@@ -30,7 +30,7 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request['method']
     if method == 'initialize':
-        assert request['params']['clientInfo']['version'] == os.environ['TOKEN_TANK_VERSION']
+        assert request['params']['clientInfo']['version'] == os.environ['PERIHEL_VERSION']
         result = {}
     elif method == 'initialized':
         initialized = True
@@ -49,7 +49,7 @@ for line in sys.stdin:
         raise AssertionError(method)
     print(json.dumps({'id': request['id'], 'result': result}), flush=True)
 '''
-with tempfile.TemporaryDirectory(prefix='token-tank-cli-') as directory:
+with tempfile.TemporaryDirectory(prefix='perihel-cli-') as directory:
     cli = Path(directory) / "Codex user's CLI"
     cli.write_text('#!' + sys.executable + '\n' + fixture)
     cli.chmod(0o755)
@@ -65,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='token-tank-cli-') as directory:
         ('invalid', False, '不是可用的 Codex CLI'),
     ]
     for mode, success, expected in cases:
-        environment = dict(os.environ, TOKEN_TANK_FIXTURE=mode, TOKEN_TANK_VERSION=version['version'])
+        environment = dict(os.environ, PERIHEL_FIXTURE=mode, PERIHEL_VERSION=version['version'])
         result = subprocess.run([str(binary), '--probe', '--cli-path', str(cli)], env=environment, capture_output=True, text=True, timeout=35)
         assert (result.returncode == 0) == success, (mode, result.stdout, result.stderr)
         assert expected in result.stdout + result.stderr, (mode, result.stdout, result.stderr)

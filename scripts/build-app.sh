@@ -16,7 +16,7 @@ enum AppVersion {
     static let bundleIdentifier = "$BUNDLE_ID"
 }
 SWIFT
-swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 Sources/TokenTank/*.swift .build/AppVersion.swift -o .build/TokenTank
+swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 Sources/perihel/*.swift .build/AppVersion.swift -o .build/perihel
 ICONSET="$PWD/.build/AppIcon.iconset"
 mkdir -p "$ICONSET"
 swift scripts/generate-icon.swift .build/AppIcon.png
@@ -29,13 +29,13 @@ iconutil -c icns "$ICONSET" -o .build/AppIcon.icns
 APP="$PWD/dist/近星点.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-cp .build/TokenTank "$APP/Contents/MacOS/TokenTank"
+cp .build/perihel "$APP/Contents/MacOS/perihel"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>TokenTank</string>
-<key>CFBundleIdentifier</key><string>org.sourcepowered.tokentank</string>
+<key>CFBundleExecutable</key><string>perihel</string>
+<key>CFBundleIdentifier</key><string>org.sourcepowered.perihel</string>
 <key>CFBundleName</key><string>近星点</string>
 <key>CFBundleDisplayName</key><string>近星点</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>

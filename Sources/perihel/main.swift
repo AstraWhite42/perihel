@@ -211,7 +211,7 @@ final class CLIReader {
             var data = try JSONSerialization.data(withJSONObject: value); data.append(10)
             try input.fileHandleForWriting.write(contentsOf: data)
         }
-        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "token_tank", "title": "近星点", "version": AppVersion.version]]])
+        try send(["id": 1, "method": "initialize", "params": ["clientInfo": ["name": "perihel", "title": "近星点", "version": AppVersion.version]]])
         var accountPlan: String?
         var buffer = Data()
         let deadline = Date().addingTimeInterval(25)
@@ -1067,7 +1067,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 if CommandLine.arguments.contains("--popover-focus-test") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let suite = "org.sourcepowered.tokentank.focus-test." + UUID().uuidString
+    let suite = "org.sourcepowered.perihel.focus-test." + UUID().uuidString
     let settings = UserDefaults(suiteName: suite)!
     defer { settings.removePersistentDomain(forName: suite) }
     let store = Store(automaticRefresh: false, settings: settings)
@@ -1095,7 +1095,7 @@ if CommandLine.arguments.contains("--popover-focus-test") {
 } else if CommandLine.arguments.contains("--theme-cycle-test") {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let suite = "org.sourcepowered.tokentank.theme-test." + UUID().uuidString
+    let suite = "org.sourcepowered.perihel.theme-test." + UUID().uuidString
     let settings = UserDefaults(suiteName: suite)!
     defer { settings.removePersistentDomain(forName: suite) }
     let store = Store(automaticRefresh: false, settings: settings)
@@ -1240,7 +1240,7 @@ if CommandLine.arguments.contains("--popover-focus-test") {
     precondition(multiple.hasExpiredWindow(at: Date(timeIntervalSince1970: 10000)))
     let sparse = try JSONDecoder().decode(Snapshot.self, from: Data("{\"rateLimitsByLimitId\":{},\"rateLimitResetCredits\":null}".utf8))
     precondition(sparse.buckets.isEmpty)
-    let suiteName = "org.sourcepowered.tokentank.tests." + UUID().uuidString
+    let suiteName = "org.sourcepowered.perihel.tests." + UUID().uuidString
     let preferences = UserDefaults(suiteName: suiteName)!
     defer { preferences.removePersistentDomain(forName: suiteName) }
     let settingsStore = Store(automaticRefresh: false, settings: preferences)
@@ -1315,7 +1315,7 @@ if CommandLine.arguments.contains("--popover-focus-test") {
 } else if let index = CommandLine.arguments.firstIndex(of: "--render-preview"), CommandLine.arguments.count > index + 1 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let previewSuite = "org.sourcepowered.tokentank.preview." + UUID().uuidString
+    let previewSuite = "org.sourcepowered.perihel.preview." + UUID().uuidString
     let previewSettings = UserDefaults(suiteName: previewSuite)!
     defer { previewSettings.removePersistentDomain(forName: previewSuite) }
     let store = Store(automaticRefresh: false, settings: previewSettings)
