@@ -1,0 +1,14 @@
+<UserControl x:Class="Perihel.CreditsFooter" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StackPanel Spacing="4">
+    <Grid>
+      <Grid Padding="4,5" ColumnSpacing="5">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock x:Name="Count" FontSize="13" FontWeight="SemiBold"/>
+        <TextBlock x:Name="Nearest" Grid.Column="1" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+        <FontIcon x:Name="Arrow" Grid.Column="2" FontSize="10"/>
+      </Grid>
+      <Button x:Name="CreditsToggle" Click="Toggle" Style="{ThemeResource SubtleButtonStyle}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MinHeight="0" Padding="0"/>
+    </Grid>
+    <StackPanel x:Name="Details" Padding="6,0" Spacing="4"/>
+  </StackPanel>
+</UserControl>

@@ -1,0 +1,47 @@
+<UserControl x:Class="Perihel.QuotaCard" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <UserControl.Resources>
+    <Style x:Key="TrackStyle" TargetType="Grid"><Setter Property="Background" Value="{ThemeResource ControlStrongFillColorDisabledBrush}"/></Style>
+    <Style x:Key="ActualStyle" TargetType="Border"><Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}"/></Style>
+  </UserControl.Resources>
+  <Border Style="{StaticResource GuideCard}">
+    <StackPanel Spacing="8">
+      <Grid ColumnSpacing="6"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock x:Name="Heading" Style="{ThemeResource BodyStrongTextBlockStyle}" TextWrapping="Wrap"/>
+        <TextBlock Grid.Column="1" x:Name="Zone" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
+      </Grid>
+      <Grid><StackPanel><TextBlock Text="剩余额度" Style="{ThemeResource CaptionTextBlockStyle}"/><TextBlock x:Name="Remaining" FontSize="34" FontWeight="SemiBold"/></StackPanel>
+        <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="距离重置" HorizontalAlignment="Right" Style="{ThemeResource CaptionTextBlockStyle}"/><TextBlock x:Name="Countdown" FontWeight="SemiBold"/></StackPanel>
+      </Grid>
+      <Grid><TextBlock x:Name="StartTime" Style="{ThemeResource CaptionTextBlockStyle}"/><TextBlock x:Name="EndTime" HorizontalAlignment="Right" Style="{ThemeResource CaptionTextBlockStyle}"/></Grid>
+      <StackPanel Spacing="2"><Grid x:Name="Timeline" Height="16" SizeChanged="ResizeBar">
+        <Grid x:Name="Track" CornerRadius="4" Height="8" VerticalAlignment="Center"/>
+        <Rectangle x:Name="Marker" Width="2" Height="16" RadiusX="1" RadiusY="1" HorizontalAlignment="Left" Fill="{ThemeResource TextFillColorPrimaryBrush}"><Rectangle.RenderTransform><TranslateTransform x:Name="Offset"/></Rectangle.RenderTransform></Rectangle>
+        <Canvas x:Name="ExpiryMarks" Height="16" VerticalAlignment="Center"/>
+        <Path x:Name="Flag" Visibility="Collapsed" AutomationProperties.Name="预告时点" HorizontalAlignment="Left" VerticalAlignment="Top" Data="M 1,15 L 1,1 L 10,1 L 7,4 L 10,7 L 2,7 L 2,15 Z" Fill="#AA72ED"><Path.RenderTransform><TranslateTransform x:Name="FlagOffset"/></Path.RenderTransform></Path>
+      </Grid>
+      <Canvas x:Name="SegmentLabels" Height="14" Visibility="Collapsed"/></StackPanel>
+      <Grid ColumnSpacing="4"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal" Spacing="3" VerticalAlignment="Center"><TextBlock Text="实际已用 · 理论刻度" Style="{ThemeResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+          <StackPanel x:Name="ExpiryLegend" Orientation="Horizontal" Spacing="2"><TextBlock Text="◆" FontSize="10" VerticalAlignment="Center" Foreground="#F28B32"/><TextBlock Text="机会到期" Style="{ThemeResource CaptionTextBlockStyle}"/></StackPanel>
+        </StackPanel>
+        <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+          <TextBlock x:Name="Budget" Style="{ThemeResource CaptionTextBlockStyle}"/>
+          <Button x:Name="BudgetToggle" Click="ToggleBudget" Padding="4,0" MinHeight="22" Style="{ThemeResource SubtleButtonStyle}" FontSize="12"/>
+        </StackPanel>
+      </Grid>
+      <Border x:Name="NewsBox" Visibility="Collapsed" Background="#168958CD" Padding="8" CornerRadius="6">
+        <StackPanel Spacing="4">
+          <Grid><TextBlock x:Name="NewsTitle" FontWeight="SemiBold" FontSize="13"/>
+            <HyperlinkButton x:Name="SourceLink" Content="来源 ↗" HorizontalAlignment="Right" Padding="2,0" MinHeight="18" FontSize="12"/></Grid>
+          <TextBlock x:Name="NewsTime" TextWrapping="Wrap" FontSize="12"/>
+          <TextBlock x:Name="NewsText" TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" IsTextSelectionEnabled="True" FontSize="12"/>
+          <Grid><Button x:Name="OriginalToggle" Content="展开原文" Click="ToggleOriginal" Style="{ThemeResource SubtleButtonStyle}" Padding="2,0" MinHeight="20" FontSize="12"/>
+            <HyperlinkButton Content="数据：Codex Resets ↗" NavigateUri="https://codex-resets.com" HorizontalAlignment="Right" Padding="2,0" MinHeight="20" FontSize="12"/></Grid>
+          <TextBlock x:Name="Published" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+          <TextBlock x:Name="Delayed" Text="消息更新延迟，暂不作为用量目标。" FontSize="12" TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+      <StackPanel x:Name="Details" Visibility="Collapsed" Spacing="6"/>
+    </StackPanel>
+  </Border>
+</UserControl>
