@@ -1,0 +1,39 @@
+name: Publish macOS release
+
+on:
+  push:
+    tags:
+      - 'v*-build*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check release tag
+        run: |
+          version=$(plutil -extract version raw version.json)
+          build=$(plutil -extract build raw version.json)
+          expected="v${version}-build${build}"
+          if [[ "$GITHUB_REF_NAME" != "$expected" ]]; then
+            echo "Expected tag $expected for this version.json" >&2
+            exit 1
+          fi
+
+      - name: Build and verify package
+        run: |
+          ./scripts/package.sh
+          (cd dist && shasum -a 256 -c *.zip.sha256)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 \
+            --verify-tag --generate-notes --title "近星点 ${GITHUB_REF_NAME}"
