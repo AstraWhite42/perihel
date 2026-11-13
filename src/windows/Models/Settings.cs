@@ -1,8 +1,6 @@
 using System;
 using System.IO;
 using System.Text.Json;
-using System.Threading;
-using Microsoft.UI.Xaml;
 
 namespace Perihel;
 
@@ -42,18 +40,5 @@ internal record Settings(string? CliPath = null, bool HasCompletedSetup = false,
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         File.WriteAllText(FilePath + ".tmp", JsonSerializer.Serialize(this, Json));
         File.Move(FilePath + ".tmp", FilePath, true);
-    }
-}
-public partial class App : Application
-{
-    private Mutex? instance;
-    private Panel? panel;
-    public App() { InitializeComponent(); }
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
-    {
-        instance = new Mutex(true, @"Local\Perihel.Windows.Tray", out var first);
-        if (!first) { Exit(); return; }
-        panel = new Panel();
-        panel.Begin();
     }
 }

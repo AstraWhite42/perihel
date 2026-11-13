@@ -56,6 +56,8 @@
 
 ## 开发者：构建与打包
 
+两个客户端分别位于 `src/macos/`（Swift、SwiftUI）和 `src/windows/`（C#、WinUI 3）。根目录的 `version.json` 提供版本信息，构建产物统一输出到 `dist/`。
+
 ### macOS
 
 构建需要 Swift 6.0+（Xcode 或 Command Line Tools）。版本信息统一维护在 `version.json`：`version` 为显示版本，`build` 为正整数构建号，`bundleIdentifier` 为应用标识。发布新包时更新版本号，并递增构建号；同一显示版本重新发布也需递增构建号。运行时版本、CLI 客户端标识、Info.plist 和 ZIP 名称均从该文件生成。
@@ -68,7 +70,7 @@ open "dist/近星点.app"
 
 构建固定使用 `arm64-apple-macosx13.0`，不生成 Intel 版本。打包脚本生成 `dist/近星点-版本-build构建号-AppleSilicon.zip` 和 SHA-256 校验文件。ZIP 仅包含应用和使用说明。当前为手动更新：退出应用后替换旧版。
 
-图标由 `scripts/generate-icon.swift` 绘制，构建脚本生成各尺寸 PNG 和 ICNS 并打包。开发预览支持：
+图标由 `src/macos/tools/generate-icon.swift` 绘制，构建脚本生成各尺寸 PNG 和 ICNS 并打包。开发预览支持：
 
 ```sh
 "dist/近星点.app/Contents/MacOS/perihel" --render-preview /tmp/panel.png --dark --expanded
@@ -86,7 +88,7 @@ open "dist/近星点.app"
 在 Windows x64 开发机上安装 .NET 10 SDK，从仓库根目录运行：
 
 ```powershell
-dotnet publish Windows/Perihel -c Release -o dist/Windows-x64
+dotnet publish src/windows -c Release -o dist/Windows-x64
 .\dist\Windows-x64\Perihel.exe
 ```
 

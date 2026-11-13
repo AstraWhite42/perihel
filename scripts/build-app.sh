@@ -16,10 +16,10 @@ enum AppVersion {
     static let bundleIdentifier = "$BUNDLE_ID"
 }
 SWIFT
-swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 Sources/perihel/*.swift .build/AppVersion.swift -o .build/perihel
+swiftc -swift-version 5 -O -target arm64-apple-macosx13.0 src/macos/*.swift .build/AppVersion.swift -o .build/perihel
 ICONSET="$PWD/.build/AppIcon.iconset"
 mkdir -p "$ICONSET"
-swift scripts/generate-icon.swift .build/AppIcon.png
+swift src/macos/tools/generate-icon.swift .build/AppIcon.png
 for SIZE in 16 32 128 256 512; do
     sips -z "$SIZE" "$SIZE" .build/AppIcon.png --out "$ICONSET/icon_${SIZE}x${SIZE}.png" >/dev/null
     DOUBLE=$((SIZE * 2))
