@@ -8,7 +8,8 @@ using Microsoft.UI.Xaml.Controls;
 namespace Perihel;
 public sealed partial class QuotaCard : UserControl
 {
-    internal QuotaWindow Model { get; }
+    internal QuotaWindow Model { get; private set; }
+    private DateTimeOffset?[] creditExpiries = [];
     internal (string Bucket, int Slot) Key { get; }
     internal bool Expanded { get; private set; }
     private bool originalExpanded;
@@ -18,24 +19,45 @@ public sealed partial class QuotaCard : UserControl
     private readonly TextBlock[][] cells = new TextBlock[5][];
     private Grid? forecastRow;
     private readonly List<(DateTimeOffset Time, int Count, TextBlock Mark)> expiryMarks = new();
-    internal QuotaCard((string, int) key, string title, QuotaWindow window, bool expanded, DateTimeOffset?[] expiries, ProgressStyle style)
+    internal QuotaCard((string, int) key, string accountLabel, QuotaWindow window, DateTimeOffset?[] expiries, ProgressStyle style)
     {
         progressStyle = style;
-        Key = key; Model = window; Expanded = expanded;
+        Key = key; Model = window;
         InitializeComponent();
-        Heading.Text = title;
+        BuildTable();
+        SetWindow(accountLabel, window, expiries);
+        Tick(DateTimeOffset.Now, null);
+    }
+    internal void UpdateWindow(string accountLabel, QuotaWindow window, DateTimeOffset?[] expiries)
+    {
+        if (Model == window && AccountLabel.Text == accountLabel && creditExpiries.SequenceEqual(expiries)) return;
+        SetWindow(accountLabel, window, expiries);
+        Tick(DateTimeOffset.Now, notice);
+    }
+    private void SetWindow(string accountLabel, QuotaWindow window, DateTimeOffset?[] expiries)
+    {
+        bool markersChanged = Model.Start != window.Start || Model.End != window.End || !creditExpiries.SequenceEqual(expiries);
+        bool timelineChanged = Model != window;
+        Model = window;
+        creditExpiries = expiries;
+        Heading.Text = window.Duration;
+        AccountLabel.Text = accountLabel;
+        ToolTipService.SetToolTip(AccountLabel, accountLabel);
         Zone.Text = TimeZoneInfo.TryConvertWindowsIdToIanaId(TimeZoneInfo.Local.Id, out var zone) ? zone : TimeZoneInfo.Local.Id;
-        Remaining.Text = window.Remaining is double r ? $"{r:F1}%" : "暂无数据";
+        Remaining.Text = window.Remaining is double r ? $"{r:F1}" : "暂无数据";
+        PercentSign.Visibility = Visible(window.Remaining.HasValue);
+        Remaining.FontSize = window.Remaining.HasValue ? 38 : 22;
 
         StartTime.Text = "开始 " + Date(window.Start);
         EndTime.Text = "重置 " + Date(window.End);
-        BuildExpiryMarks(expiries);
-        BuildTable();
-        Tick(DateTimeOffset.Now, null);
+        if (markersChanged || expiryMarks.Count == 0) BuildExpiryMarks(expiries);
+        if (timelineChanged) DrawSegments();
     }
     private static string Date(DateTimeOffset? t) => t?.LocalDateTime.ToString(t?.LocalDateTime.Year == DateTime.Now.Year ? "M/d HH:mm" : "yyyy/M/d HH:mm") ?? "暂无数据";
     private void BuildExpiryMarks(DateTimeOffset?[] expiries)
     {
+        expiryMarks.Clear();
+        ExpiryMarks.Children.Clear();
         var orange = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 242, 139, 50));
         foreach (var group in expiries.OfType<DateTimeOffset>().Where(t => t >= Model.Start && t <= Model.End).GroupBy(t => t))
         {
@@ -43,6 +65,7 @@ public sealed partial class QuotaCard : UserControl
                 TextAlignment = TextAlignment.Center, Foreground = orange };
             expiryMarks.Add((group.Key, group.Count(), mark));
             ExpiryMarks.Children.Add(mark);
+            Canvas.SetLeft(mark, Timeline.ActualWidth * Model.Theory(group.Key)!.Value / 100 - mark.Width / 2);
         }
         ExpiryLegend.Visibility = Visible(expiryMarks.Count > 0);
     }
@@ -57,7 +80,8 @@ public sealed partial class QuotaCard : UserControl
             {
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = col == 0 ? new GridLength(1, GridUnitType.Star) : new GridLength(60) });
                 var cell = new TextBlock {
-                    FontSize = 12, TextAlignment = col == 0 ? TextAlignment.Left : TextAlignment.Right,
+                    Style = row == 0 ? (Style)Application.Current.Resources["Meta"] : null,
+                    FontSize = row == 0 ? 12 : 13, TextAlignment = col == 0 ? TextAlignment.Left : TextAlignment.Right,
                     Text = col == 0 ? labels[row] : row == 0 ? new[] { "", "已用", "剩余", "差值 ⓘ" }[col] : ""
                 };
                 if (col > 0) Microsoft.UI.Xaml.Documents.Typography.SetNumeralAlignment(cell, Microsoft.UI.Xaml.FontNumeralAlignment.Tabular);
@@ -77,11 +101,19 @@ public sealed partial class QuotaCard : UserControl
         cells[row][3].Text = delta is not double d ? "—" : Math.Abs(d) < 0.05 ? "0.0%" : d.ToString("+0.0;-0.0") + "%";
     }
     private static Visibility Visible(bool show) => show ? Visibility.Visible : Visibility.Collapsed;
-    internal void ResetExpansion() { Expanded = false; Tick(DateTimeOffset.Now, notice); }
+    internal void ResetExpansion(DateTimeOffset now, ResetNotice? currentNotice)
+    {
+        Expanded = false;
+        Tick(now, currentNotice);
+    }
     private void ToggleBudget(object sender, RoutedEventArgs args)
     {
         Expanded = !Expanded;
         Tick(DateTimeOffset.Now, notice);
+    }
+    private void NewsTrimChanged(TextBlock sender, IsTextTrimmedChangedEventArgs args)
+    {
+        OriginalToggle.Visibility = Visible(originalExpanded || sender.IsTextTrimmed);
     }
     private void ToggleOriginal(object sender, RoutedEventArgs args)
     {
@@ -100,7 +132,9 @@ public sealed partial class QuotaCard : UserControl
         theory = Model.Theory(now);
         bool expandable = Model.WindowDurationMins != 300 && Model.UsedPercent.HasValue && theory.HasValue;
         Budget.Visibility = Visible(!expandable); BudgetToggle.Visibility = Visible(expandable);
-        BudgetToggle.Content = Budget.Text + (Expanded ? "  ⌃" : "  ⌄");
+        BudgetLabel.Text = Budget.Text;
+        BudgetChevron.Glyph = Expanded ? "\uE70E" : "\uE70D";
+        AutomationProperties.SetName(BudgetToggle, Budget.Text + (Expanded ? "，收起明细" : "，展开明细"));
         Details.Visibility = Visible(expandable && Expanded);
         forecastRow!.Visibility = Flag.Visibility = Visible(forecastPercent.HasValue);
         if (target.HasValue && (previous != notice || ToolTipService.GetToolTip(Flag) == null)) ToolTipService.SetToolTip(Flag, $"{notice!.TimeLabel} · {Date(target)}");
@@ -120,6 +154,7 @@ public sealed partial class QuotaCard : UserControl
         if (notice is { } n)
         {
             NewsTitle.Text = n.Title; NewsText.Text = n.Text;
+            OriginalToggle.Visibility = Visible(originalExpanded || NewsText.IsTextTrimmed);
             SourceLink.NavigateUri = n.Link; SourceLink.Visibility = Visible(n.Link != null);
             NewsTime.Text = n.Target is { } t ? t <= now ? "公告时间已过，等待确认" :
                 $"{n.TimeLabel} · {Date(t)} · 距今 {QuotaWindow.CountdownUntil(t, now)}" :
@@ -200,7 +235,7 @@ public sealed partial class QuotaCard : UserControl
             if (right-left < 20) continue;
             string text = progressStyle == ProgressStyle.CalendarDays ? from.LocalDateTime.ToString(hourly ? "HH:mm" : sameMonth ? "d日" : "M/d") :
                 hourly ? $"第{i+1}小时" : (to-from).TotalHours < 24 ? $"{(to-from).TotalHours:0.##}小时" : $"第{i+1}天";
-            var label = new TextBlock { Text = text, FontSize = 9, Width = right-left, TextAlignment = TextAlignment.Center };
+            var label = new TextBlock { Text = text, Style = (Style)Application.Current.Resources["Meta"], FontSize = 11, Width = right-left, TextAlignment = TextAlignment.Center };
             ToolTipService.SetToolTip(label, $"开始：{from.LocalDateTime:yyyy/MM/dd HH:mm:ss}\n结束：{to.LocalDateTime:yyyy/MM/dd HH:mm:ss}");
             Canvas.SetLeft(label,left); SegmentLabels.Children.Add(label);
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -8,11 +9,14 @@ public sealed partial class CreditsFooter : UserControl
 {
     private readonly DateTimeOffset?[] expiries;
     private readonly TextBlock[] values;
+    internal int? AvailableCount { get; }
+    internal bool Matches(int? count, DateTimeOffset?[] dates) => AvailableCount == count && expiries.SequenceEqual(dates);
     internal bool Expanded { get; private set; }
 
     internal CreditsFooter(int? count, DateTimeOffset?[] expiries, bool expanded)
     {
         InitializeComponent();
+        AvailableCount = count;
         this.expiries = expiries;
         values = new TextBlock[expiries.Length];
         Count.Text = count.HasValue ? $"可用重置 {count} 次" : "可用重置 暂无数据";

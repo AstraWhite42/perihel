@@ -66,7 +66,7 @@ internal record ResetCredits(int? AvailableCount, ResetCredit[]? Credits)
 internal record Snapshot(Dictionary<string, Bucket>? RateLimitsByLimitId, Bucket? RateLimits, ResetCredits? RateLimitResetCredits)
 {
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    public IEnumerable<(string Bucket, int Slot, string Title, QuotaWindow Window)> Cards(string? accountPlan)
+    public IEnumerable<(string Bucket, int Slot, string AccountLabel, QuotaWindow Window)> Cards(string? accountPlan)
     {
         var buckets = RateLimitsByLimitId is { Count: > 0 } ? RateLimitsByLimitId : new();
         if (buckets.Count == 0 && RateLimits != null) buckets = new() { ["codex"] = RateLimits };
@@ -74,7 +74,7 @@ internal record Snapshot(Dictionary<string, Bucket>? RateLimitsByLimitId, Bucket
         {
             var name = bucket.LimitName ?? (key == "codex" ? "Codex" : key);
             foreach (var (w, slot) in new[] { (bucket.Primary, 0), (bucket.Secondary, 1) }.Where(p => p.Item1 != null).OrderBy(p => p.Item1!.WindowDurationMins != 10080))
-                yield return (key, slot, $"{name} · {Plan(bucket.PlanType ?? accountPlan)} · {w!.Duration}", w);
+                yield return (key, slot, $"{name} · {Plan(bucket.PlanType ?? accountPlan)}", w!);
         }
     }
     private static string Plan(string? p) => p switch {

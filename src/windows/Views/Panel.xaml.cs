@@ -38,6 +38,13 @@ public sealed partial class Panel : Window
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
     private readonly nint hwnd;
+    private (int Width, int Height, int Diameter) clippedSize;
+    [DllImport("gdi32.dll")] private static extern nint CreateRoundRectRgn(int left, int top, int right, int bottom, int ellipseWidth, int ellipseHeight);
+    [DllImport("user32.dll")] private static extern int SetWindowRgn(nint window, nint region, bool redraw);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint handle);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowStyle(nint hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] private static extern int SetWindowStyle(nint hwnd, int index, int style);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(nint hwnd, nint after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hwnd);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(nint monitor, int type, out uint dpiX, out uint dpiY);
@@ -59,9 +66,18 @@ public sealed partial class Panel : Window
         ConfigureMenu();
         ApplyTheme();
         var presenter = (OverlappedPresenter)AppWindow.Presenter;
-        presenter.SetBorderAndTitleBar(true, false);
+        presenter.SetBorderAndTitleBar(false, false);
         presenter.IsResizable = presenter.IsMaximizable = presenter.IsMinimizable = false;
         AppWindow.IsShownInSwitchers = false;
+        // OverlappedPresenter can leave WS_DLGFRAME and WS_EX_WINDOWEDGE on Windows 10.
+        // Recalculate the client area after removing both native frame layers.
+        const int styleIndex = -16, extendedStyleIndex = -20;
+        const int captionAndSizingFrame = 0x00C40000;
+        const int extendedFrameEdges = 0x00020301;
+        SetWindowStyle(hwnd, styleIndex, GetWindowStyle(hwnd, styleIndex) & ~captionAndSizingFrame);
+        SetWindowStyle(hwnd, extendedStyleIndex, GetWindowStyle(hwnd, extendedStyleIndex) & ~extendedFrameEdges);
+        const uint frameChangedWithoutMoveSizeActivationOrZOrder = 0x0037;
+        SetWindowPos(hwnd, 0, 0, 0, 0, 0, frameChangedWithoutMoveSizeActivationOrZOrder);
         tray = new Tray(() => DispatcherQueue.TryEnqueue(Toggle));
         tray.ImageChanged += ShowEnergyPreview;
         Root.ActualThemeChanged += (_, _) => { tray.InvalidateAppearance(); Tick(); };
@@ -102,7 +118,9 @@ public sealed partial class Panel : Window
     }
     private void Open()
     {
-        foreach (var card in Cards.Children.OfType<QuotaCard>()) card.ResetExpansion();
+        var now = DateTimeOffset.Now;
+        var notice = feed.Notice(now);
+        foreach (var card in Cards.Children.OfType<QuotaCard>()) card.ResetExpansion(now, notice);
         Scroller.ChangeView(null, 0, null, true);
         RenderState(); LayoutPanel(); AppWindow.Show(); Activate(); SetForegroundWindow(hwnd); _ = Refresh();
     }
@@ -130,11 +148,11 @@ public sealed partial class Panel : Window
         // AppWindow sizes include the native frame; XAML measures the client area in DIPs.
         int frameWidth = Math.Max(0, AppWindow.Size.Width - AppWindow.ClientSize.Width);
         int frameHeight = Math.Max(0, AppWindow.Size.Height - AppWindow.ClientSize.Height);
-        double contentWidth = Math.Max(1, (width - frameWidth) / scale - Root.Padding.Left - Root.Padding.Right);
+        double contentWidth = Math.Max(1, (width - frameWidth) / scale - Root.Padding.Left - Root.Padding.Right - Root.BorderThickness.Left - Root.BorderThickness.Right);
         var available = new Windows.Foundation.Size(contentWidth, double.PositiveInfinity);
         Toolbar.Measure(available);
         Body.Measure(available);
-        double fixedHeight = Root.Padding.Top + Toolbar.DesiredSize.Height + Root.RowSpacing + Root.Padding.Bottom;
+        double fixedHeight = Root.BorderThickness.Top + Root.BorderThickness.Bottom + Root.Padding.Top + Toolbar.DesiredSize.Height + Root.RowSpacing + Root.Padding.Bottom;
         double bodyLimit = Math.Max(1, Math.Min(480, (work.Height - 16 - frameHeight) / scale - fixedHeight));
         double bodyHeight = Body.DesiredSize.Height;
         bool overflow = bodyHeight > bodyLimit;
@@ -147,6 +165,19 @@ public sealed partial class Panel : Window
         var placement = new RectInt32(Math.Max(work.Left,x), Math.Max(work.Top,y), width,height);
         if (AppWindow.Size.Width != width || AppWindow.Size.Height != height || AppWindow.Position.X != placement.X || AppWindow.Position.Y != placement.Y)
             AppWindow.MoveAndResize(placement);
+        ApplyWindowCorners(width, height, scale);
+    }
+    private void ApplyWindowCorners(int width, int height, double scale)
+    {
+        // Clip the HWND too: on Windows 10 a rounded XAML background alone leaves square corners.
+        int diameter = (int)Math.Round(2 * Root.CornerRadius.TopLeft * scale);
+        if (clippedSize == (width, height, diameter)) return;
+        var region = CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
+        if (region == 0) return;
+        if (SetWindowRgn(hwnd, region, true) != 0)
+            clippedSize = (width, height, diameter); // The window now owns the region.
+        else
+            DeleteObject(region);
     }
     private void PowerChanged(object sender, PowerModeChangedEventArgs args)
     { if (args.Mode == PowerModes.Resume) DispatcherQueue.TryEnqueue(() => _ = Refresh()); }
@@ -173,21 +204,45 @@ public sealed partial class Panel : Window
         finally
         {
             loading = false;
-            if (!closing) { RebuildCards(); RenderState(); if (AppWindow.IsVisible) LayoutPanel(); }
+            if (!closing) { UpdateCards(); RenderState(); QueueLayout(); }
         }
     }
-    private void RebuildCards()
+    private void UpdateCards()
     {
-        var expanded = Cards.Children.OfType<QuotaCard>().Where(c => c.Expanded).Select(c => c.Key).ToHashSet();
-        bool creditsExpanded = Cards.Children.OfType<CreditsFooter>().FirstOrDefault()?.Expanded == true;
-        Cards.Children.Clear();
-        if (inspection == null) return;
-        var credits = inspection.Snapshot.RateLimitResetCredits;
+        if (inspection == null) { Cards.Children.Clear(); return; }
+        var snapshot = inspection.Snapshot;
+        var credits = snapshot.RateLimitResetCredits;
         var expiries = credits?.SortedExpiries() ?? [];
-        foreach (var (bucket, slot, title, w) in inspection.Snapshot.Cards(inspection.Plan))
-            Cards.Children.Add(new QuotaCard((bucket, slot), title, w, expanded.Contains((bucket, slot)), expiries, settings.ProgressStyle));
-        if (Cards.Children.Count == 0) Cards.Children.Add(new TextBlock { Text = "当前账户未返回额度窗口" });
-        if (credits != null) Cards.Children.Add(new CreditsFooter(credits.AvailableCount, expiries, creditsExpanded));
+        var existing = Cards.Children.OfType<QuotaCard>().ToDictionary(card => card.Key);
+        int index = 0;
+        void Place(UIElement element)
+        {
+            int old = Cards.Children.IndexOf(element);
+            if (old != index)
+            {
+                if (old >= 0) Cards.Children.RemoveAt(old);
+                Cards.Children.Insert(index, element);
+            }
+            index++;
+        }
+        foreach (var (bucket, slot, label, window) in snapshot.Cards(inspection.Plan))
+        {
+            if (existing.TryGetValue((bucket, slot), out var card))
+                card.UpdateWindow(label, window, expiries);
+            else
+                card = new QuotaCard((bucket, slot), label, window, expiries, settings.ProgressStyle);
+            Place(card);
+        }
+        if (index == 0)
+            Place(Cards.Children.OfType<TextBlock>().FirstOrDefault() ?? new TextBlock { Text = "当前账户未返回额度窗口" });
+        if (credits != null)
+        {
+            var footer = Cards.Children.OfType<CreditsFooter>().FirstOrDefault();
+            if (footer == null || !footer.Matches(credits.AvailableCount, expiries))
+                footer = new CreditsFooter(credits.AvailableCount, expiries, footer?.Expanded == true);
+            Place(footer);
+        }
+        while (Cards.Children.Count > index) Cards.Children.RemoveAt(Cards.Children.Count - 1);
     }
     private void RenderState()
     {
@@ -205,6 +260,11 @@ public sealed partial class Panel : Window
         var now = DateTimeOffset.Now;
         Status.Text = loading ? "更新中…" : success is not { } updated ? "尚未获取额度" :
             (now-updated).TotalMinutes < 1 ? "刚刚更新" : $"{(int)(now-updated).TotalMinutes} 分钟前更新";
+        StatusSpinner.IsActive = loading;
+        StatusSpinner.Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+        StatusDot.Visibility = loading ? Visibility.Collapsed : Visibility.Visible;
+        string statusColor = success == null ? "TextFillColorSecondaryBrush" : "SystemFillColorSuccessBrush";
+        StatusDot.Fill = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[error != null ? "SystemFillColorCautionBrush" : statusColor];
         var first = inspection?.Snapshot.Cards(inspection.Plan).FirstOrDefault().Window;
         var remaining = first?.Remaining is double r ? $"{Math.Round(r, MidpointRounding.AwayFromZero)}%" : null;
         var difference = first?.UsedPercent - first?.Theory(now);
@@ -272,10 +332,9 @@ public sealed partial class Panel : Window
         using var buffer = new MemoryStream();
         using var tinted = new System.Drawing.Bitmap(bitmap.Width,bitmap.Height);
         using var graphics = System.Drawing.Graphics.FromImage(tinted);
-        bool dark = Root.ActualTheme == ElementTheme.Dark;
-        float ink = dark ? 0.96f : 0.14f;
+        var onAccent = ((Microsoft.UI.Xaml.Media.SolidColorBrush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"]).Color;
         using var attributes = new System.Drawing.Imaging.ImageAttributes();
-        attributes.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix00=0, Matrix11=0, Matrix22=0, Matrix40=ink, Matrix41=ink, Matrix42=ink });
+        attributes.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix00=0, Matrix11=0, Matrix22=0, Matrix40=onAccent.R/255f, Matrix41=onAccent.G/255f, Matrix42=onAccent.B/255f });
         graphics.DrawImage(bitmap, new System.Drawing.Rectangle(0,0,bitmap.Width,bitmap.Height), 0,0,bitmap.Width,bitmap.Height,System.Drawing.GraphicsUnit.Pixel,attributes);
         tinted.Save(buffer, System.Drawing.Imaging.ImageFormat.Png);
         buffer.Position = 0;
