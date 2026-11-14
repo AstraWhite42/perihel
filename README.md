@@ -16,7 +16,7 @@
 
 适用于 Windows 10 2004 或更高版本的 x64 电脑。
 
-1. 将预览版的完整程序文件夹放到准备长期使用的位置。如果收到的是压缩包，先完整解压。
+1. 从[发布页](https://github.com/AstraWhite42/perihel/releases)选择带有 Windows 附件的版本，下载文件名以 `Windows-x64.zip` 结尾的压缩包，完整解压到准备长期使用的位置。
 2. 双击文件夹里的 `Perihel.exe`。请保留同目录下的文件，程序运行时会用到它们。
 3. 首次打开会显示连接引导。以后点击任务栏通知区域里的百分比或能量环即可打开面板；找不到时，展开「显示隐藏的图标」。
 
@@ -93,6 +93,12 @@ dotnet publish src/windows -c Release -o dist/Windows-x64
 ```
 
 `dist/Windows-x64` 包含程序和运行时。分发时请打包整个目录。调试时可用 `--cli-path "完整路径"` 临时指定 CLI，或用 `--news-fixture "完整路径"` 载入公开消息样例。
+
+### 发布两个平台的安装包
+
+在 Windows 上用 PowerShell 7.3 或更高版本运行 `./scripts/package-windows.ps1`，可在 `dist/` 生成自包含的 Windows x64 ZIP 和 SHA-256 校验文件。
+
+发布时，推送与 `version.json` 一致的 `v<version>-build<build>` 标签。GitHub Actions 会并行打包 macOS 和 Windows，校验两个 ZIP 后，将它们及各自的 `.sha256` 文件上传到同一个 GitHub Release。
 
 ## 作者
 
