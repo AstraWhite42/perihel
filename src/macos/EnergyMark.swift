@@ -14,7 +14,9 @@ enum EnergyMark {
     static func level(_ remaining: Double?) -> Int {
         guard let remaining, remaining.isFinite else { return -1 }
         // A cell remains lit at exactly half capacity.
-        return Int(floor(max(0, min(100, remaining)) * 7 / 100 + 0.5 + 1e-10))
+        let percent: Double = max(0, min(100, remaining))
+        let cells: Double = percent * 7 / 100
+        return Int(floor(cells + 0.5 + 1e-10))
     }
     static func image(remaining: Double? = 100, direction: DepletionDirection = .counterclockwise) -> NSImage {
         let count = level(remaining)
