@@ -26,9 +26,8 @@ final class Store: ObservableObject {
         didSet { settings.set(progressStyle.rawValue, forKey: "progressStyle") }
     }
     @Published var theme: AppTheme {
-        didSet { settings.set(theme.rawValue, forKey: "theme"); onThemeChange?() }
+        didSet { settings.set(theme.rawValue, forKey: "theme") }
     }
-    var onThemeChange: (() -> Void)?
     var onChange: (() -> Void)?
     private let settings: UserDefaults
     private var timer: Timer?

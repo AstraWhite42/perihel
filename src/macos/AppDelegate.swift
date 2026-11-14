@@ -6,7 +6,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let store: Store
     var status: NSStatusItem!
     var popover = NSPopover()
-    private var themeUpdate: DispatchWorkItem?
     private var focusObserversInstalled = false
     private var renderedLevel = -2
     private var renderedDirection: DepletionDirection?
@@ -19,7 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover = makePopover()
         installFocusObservers()
         store.onChange = { [weak self] in self?.updateTitle() }
-        store.onThemeChange = { [weak self] in self?.scheduleThemeUpdate() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         updateTitle(); store.refresh()
         if store.showSetup {
@@ -34,8 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(menuDidEndTracking), name: NSMenu.didEndTrackingNotification, object: nil)
     }
     func closeForExternalFocus() {
-        themeUpdate?.cancel()
-        themeUpdate = nil
         if popover.isShown {
             let animates = popover.animates
             popover.animates = false
@@ -61,33 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let panel = NSPopover()
         panel.behavior = .transient
         panel.delegate = self
-        if #available(macOS 14.0, *) {
-            panel.hasFullSizeContent = store.theme == .readable
-        }
         let controller = NSHostingController(rootView: PanelView(store: store))
         controller.sizingOptions = [.preferredContentSize]
         panel.contentViewController = controller
         return panel
-    }
-    func scheduleThemeUpdate() {
-        themeUpdate?.cancel()
-        let update = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            let reopen = self.popover.isShown
-            // Full-size content changes the native frame and safe-area geometry.
-            // Recreate the container instead of reusing geometry from another theme.
-            self.popover.delegate = nil
-            self.popover.animates = false
-            self.popover.close()
-            self.store.endPanelSession()
-            self.popover = self.makePopover()
-            if reopen, let button = self.status.button {
-                self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
-        themeUpdate = update
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: update)
     }
     func updateTitle() {
         let expired = store.snapshot?.hasExpiredWindow(at: store.now) ?? false
@@ -116,8 +89,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
     func popoverDidClose(_ notification: Notification) {
-        themeUpdate?.cancel()
-        themeUpdate = nil
         store.endPanelSession()
     }
     @objc func wake() { store.refresh() }
