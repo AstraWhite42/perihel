@@ -8,9 +8,6 @@
       </ResourceDictionary.MergedDictionaries>
       <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="PanelSurface" Color="#EDF2F6"/>
-          <SolidColorBrush x:Key="PanelWash" Color="#DDEDF2F6"/>
-          <SolidColorBrush x:Key="CardSurface" Color="#FFFFFF"/>
           <SolidColorBrush x:Key="CardOutline" Color="#D7E0E8"/>
           <SolidColorBrush x:Key="PanelOutline" Color="#A8B6C5"/>
           <SolidColorBrush x:Key="TrackBrush" Color="#DDE6EF"/>
@@ -18,9 +15,6 @@
           <SolidColorBrush x:Key="ForecastSurface" Color="#F4EFFA"/>
         </ResourceDictionary>
         <ResourceDictionary x:Key="Default">
-          <SolidColorBrush x:Key="PanelSurface" Color="#1B2129"/>
-          <SolidColorBrush x:Key="PanelWash" Color="#DC1B2129"/>
-          <SolidColorBrush x:Key="CardSurface" Color="#252D37"/>
           <SolidColorBrush x:Key="CardOutline" Color="#3B4653"/>
           <SolidColorBrush x:Key="PanelOutline" Color="#647487"/>
           <SolidColorBrush x:Key="TrackBrush" Color="#42505E"/>
@@ -28,9 +22,6 @@
           <SolidColorBrush x:Key="ForecastSurface" Color="#372F47"/>
         </ResourceDictionary>
         <ResourceDictionary x:Key="HighContrast">
-          <SolidColorBrush x:Key="PanelSurface" Color="{ThemeResource SystemColorWindowColor}"/>
-          <SolidColorBrush x:Key="PanelWash" Color="{ThemeResource SystemColorWindowColor}"/>
-          <SolidColorBrush x:Key="CardSurface" Color="{ThemeResource SystemColorWindowColor}"/>
           <SolidColorBrush x:Key="CardOutline" Color="{ThemeResource SystemColorWindowTextColor}"/>
           <SolidColorBrush x:Key="PanelOutline" Color="{ThemeResource SystemColorWindowTextColor}"/>
           <SolidColorBrush x:Key="TrackBrush" Color="{ThemeResource SystemColorGrayTextColor}"/>
@@ -42,7 +33,7 @@
       <Style x:Key="GuideCard" TargetType="Border">
         <Setter Property="Padding" Value="15,12"/>
         <Setter Property="CornerRadius" Value="12"/>
-        <Setter Property="Background" Value="{ThemeResource CardSurface}"/>
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
         <Setter Property="BorderBrush" Value="{ThemeResource CardOutline}"/>
         <Setter Property="BorderThickness" Value="1"/>
       </Style>

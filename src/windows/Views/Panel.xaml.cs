@@ -288,7 +288,7 @@ public sealed partial class Panel : Window
     private void ConfigureMenu()
     {
         AddChoices(ThemeMenu, settings.Theme, (s,v) => s with { Theme = v },
-            (Theme.System,"系统原生"), (Theme.Readable,"清晰底色"));
+            (Theme.System,"半透明 · 亚克力"), (Theme.Readable,"不透明 · 纯色"));
         AddChoices(DirectionMenu, settings.DepletionDirection, (s,v) => s with { DepletionDirection = v },
             (DepletionDirection.Counterclockwise,"逆时针熄灭"), (DepletionDirection.Clockwise,"顺时针熄灭"));
         AddChoices(DisplayMenu, settings.MenuBarDisplay, (s,v) => s with { MenuBarDisplay = v },
@@ -322,9 +322,10 @@ public sealed partial class Panel : Window
     }
     private void ApplyTheme()
     {
-        bool system = settings.Theme == Theme.System;
-        Root.Style = (Style)Root.Resources[system ? "SystemSurface" : "ReadableSurface"];
-        SystemBackdrop = system ? new Microsoft.UI.Xaml.Media.MicaBackdrop() : null;
+        bool acrylic = settings.Theme == Theme.System &&
+            Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController.IsSupported();
+        SystemBackdrop = acrylic ? new Microsoft.UI.Xaml.Media.DesktopAcrylicBackdrop() : null;
+        Root.Style = (Style)Root.Resources[acrylic ? "AcrylicSurface" : "SolidSurface"];
     }
     private void ShowEnergyPreview(System.Drawing.Bitmap bitmap)
     {

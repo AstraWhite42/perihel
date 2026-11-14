@@ -9,6 +9,6 @@
       </Grid>
       <Button x:Name="CreditsToggle" Click="Toggle" Style="{ThemeResource SubtleButtonStyle}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" MinHeight="0" Padding="0"/>
     </Grid>
-    <StackPanel x:Name="Details" Background="{ThemeResource CardSurface}" CornerRadius="8" Padding="12,8" Spacing="6"/>
+    <StackPanel x:Name="Details" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Padding="12,8" Spacing="6"/>
   </StackPanel>
 </UserControl>
