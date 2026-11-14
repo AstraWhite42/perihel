@@ -77,6 +77,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate Chinese release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[] | select(.draft == false) | .tag_name' |
+            python3 scripts/release-notes.py "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -95,4 +108,4 @@ jobs:
             assets+=("$file" "$file.sha256")
           done
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --generate-notes --title "近星点 $GITHUB_REF_NAME"
+            --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" --title "近星点 $GITHUB_REF_NAME"
