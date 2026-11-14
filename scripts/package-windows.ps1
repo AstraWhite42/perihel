@@ -9,7 +9,7 @@ if ($metadata.version -notmatch '^\d+\.\d+(\.\d+)?$' -or $metadata.build -notmat
 
 $dist = Join-Path $root 'dist'
 [IO.Directory]::CreateDirectory($dist) | Out-Null
-$name = "近星点-$($metadata.version)-build$($metadata.build)-Windows-x64.zip"
+$name = "perihel-$($metadata.version)-build$($metadata.build)-Windows-x64.zip"
 $stage = [IO.Directory]::CreateTempSubdirectory('perihel-package-')
 try {
     $publish = Join-Path $stage.FullName 'publish'

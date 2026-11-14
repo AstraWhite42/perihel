@@ -90,7 +90,7 @@ jobs:
         run: |
           assets=()
           for platform in AppleSilicon Windows-x64; do
-            file="近星点-${GITHUB_REF_NAME#v}-$platform.zip"
+            file="perihel-${GITHUB_REF_NAME#v}-$platform.zip"
             sha256sum --check "$file.sha256"
             assets+=("$file" "$file.sha256")
           done

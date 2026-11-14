@@ -68,7 +68,7 @@ open "dist/近星点.app"
 ./scripts/package.sh
 ```
 
-构建固定使用 `arm64-apple-macosx13.0`，不生成 Intel 版本。打包脚本生成 `dist/近星点-版本-build构建号-AppleSilicon.zip` 和 SHA-256 校验文件。ZIP 仅包含应用和使用说明。当前为手动更新：退出应用后替换旧版。
+构建固定使用 `arm64-apple-macosx13.0`，不生成 Intel 版本。打包脚本生成 `dist/perihel-版本-build构建号-AppleSilicon.zip` 和 SHA-256 校验文件。ZIP 仅包含应用和使用说明。当前为手动更新：退出应用后替换旧版。
 
 图标由 `src/macos/tools/generate-icon.swift` 绘制，构建脚本生成各尺寸 PNG 和 ICNS 并打包。开发预览支持：
 
